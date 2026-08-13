@@ -13,6 +13,7 @@ import queue
 import threading
 import time
 import tkinter as tk
+from version import APP_VERSION
 from tkinter import filedialog, messagebox, ttk
 
 try:
