@@ -42,8 +42,19 @@ jobs:
             --clean \
             dj_tagger_gui.py
 
-      - name: Guardar aplicación
+      - name: Crear DMG
+        run: |
+          mkdir -p dmg
+          cp -R "dist/DJ Tagger.app" "dmg/"
+          hdiutil create \
+            -volname "DJ Tagger" \
+            -srcfolder "dmg" \
+            -ov \
+            -format UDZO \
+            "DJ Tagger.dmg"
+
+      - name: Guardar DMG
         uses: actions/upload-artifact@v4
         with:
           name: DJ-Tagger-macOS
-          path: "dist/DJ Tagger.app"
+          path: "DJ Tagger.dmg"
