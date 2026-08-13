@@ -42,13 +42,8 @@ jobs:
             --clean \
             dj_tagger_gui.py
 
-      - name: Comprimir aplicación
-        run: |
-          cd dist
-          zip -r "../DJ Tagger-macOS.zip" "DJ Tagger.app"
-
       - name: Guardar aplicación
         uses: actions/upload-artifact@v4
         with:
           name: DJ-Tagger-macOS
-          path: "DJ Tagger-macOS.zip"
+          path: "dist/DJ Tagger.app"
