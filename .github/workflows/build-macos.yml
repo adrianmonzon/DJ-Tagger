@@ -58,3 +58,12 @@ jobs:
         with:
           name: DJ-Tagger-macOS
           path: "DJ Tagger.dmg"
+
+      - name: Crear release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: DJ Tagger v1.0.${{ github.run_number }}
+          files: "DJ Tagger.dmg"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
