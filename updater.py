@@ -1,6 +1,11 @@
 import json
+import os
+import shutil
 import ssl
+import subprocess
+import tempfile
 import urllib.request
+import zipfile
 
 import certifi
 
@@ -16,37 +21,58 @@ def version_tuple(version):
     return tuple(int(part) for part in version.lstrip("v").split("."))
 
 
+def _create_ssl_context():
+    return ssl.create_default_context(
+        cafile=certifi.where()
+    )
+
+
+def _get_latest_release():
+    request = urllib.request.Request(
+        GITHUB_API_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "DJ-Tagger",
+        },
+    )
+
+    context = _create_ssl_context()
+
+    with urllib.request.urlopen(
+        request,
+        timeout=10,
+        context=context,
+    ) as response:
+        return json.loads(
+            response.read().decode("utf-8")
+        )
+
+
 def check_for_update():
     try:
-        request = urllib.request.Request(
-            GITHUB_API_URL,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "DJ-Tagger",
-            },
-        )
-
-        context = ssl.create_default_context(
-            cafile=certifi.where()
-        )
-
-        with urllib.request.urlopen(
-            request,
-            timeout=5,
-            context=context,
-        ) as response:
-            data = json.loads(
-                response.read().decode("utf-8")
-            )
+        data = _get_latest_release()
 
         latest_version = data["tag_name"].lstrip("v")
 
         if version_tuple(latest_version) > version_tuple(APP_VERSION):
+            download_url = None
+
+            for asset in data.get("assets", []):
+                name = asset.get("name", "")
+
+                if (
+                    name.lower().endswith(".zip")
+                    and "macos" in name.lower()
+                ):
+                    download_url = asset.get("browser_download_url")
+                    break
+
             return {
                 "available": True,
                 "current_version": APP_VERSION,
                 "latest_version": latest_version,
-                "download_url": data.get("html_url"),
+                "download_url": download_url,
+                "release_url": data.get("html_url"),
             }
 
         return {
@@ -54,6 +80,7 @@ def check_for_update():
             "current_version": APP_VERSION,
             "latest_version": latest_version,
             "download_url": None,
+            "release_url": data.get("html_url"),
         }
 
     except Exception as error:
@@ -62,5 +89,140 @@ def check_for_update():
             "current_version": APP_VERSION,
             "latest_version": None,
             "download_url": None,
+            "release_url": None,
             "error": str(error),
         }
+
+
+def download_update(download_url):
+    """
+    Descarga la nueva versión y devuelve la ruta del ZIP descargado.
+    """
+
+    if not download_url:
+        raise RuntimeError(
+            "No se encontró el ZIP de la nueva versión."
+        )
+
+    temp_dir = tempfile.mkdtemp(
+        prefix="dj_tagger_update_"
+    )
+
+    zip_path = os.path.join(
+        temp_dir,
+        "DJ Tagger-macOS.zip",
+    )
+
+    request = urllib.request.Request(
+        download_url,
+        headers={
+            "User-Agent": "DJ-Tagger",
+        },
+    )
+
+    context = _create_ssl_context()
+
+    with urllib.request.urlopen(
+        request,
+        timeout=60,
+        context=context,
+    ) as response, open(zip_path, "wb") as output_file:
+        shutil.copyfileobj(
+            response,
+            output_file,
+        )
+
+    return zip_path
+
+
+def install_update(zip_path):
+    """
+    Prepara la instalación de la nueva versión.
+
+    Devuelve True si el proceso de actualización ha sido iniciado.
+    """
+
+    if not os.path.isfile(zip_path):
+        raise FileNotFoundError(
+            f"No se encontró el archivo descargado: {zip_path}"
+        )
+
+    app_path = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "DJ Tagger.app",
+        )
+    )
+
+    extract_dir = tempfile.mkdtemp(
+        prefix="dj_tagger_extract_"
+    )
+
+    with zipfile.ZipFile(
+        zip_path,
+        "r",
+    ) as archive:
+        archive.extractall(extract_dir)
+
+    new_app_path = os.path.join(
+        extract_dir,
+        "DJ Tagger.app",
+    )
+
+    if not os.path.isdir(new_app_path):
+        raise RuntimeError(
+            "El ZIP descargado no contiene 'DJ Tagger.app'."
+        )
+
+    updater_script = os.path.join(
+        tempfile.gettempdir(),
+        "dj_tagger_apply_update.py",
+    )
+
+    script = f'''import os
+import shutil
+import subprocess
+import time
+
+old_app = {app_path!r}
+new_app = {new_app_path!r}
+
+time.sleep(2)
+
+try:
+    if os.path.exists(old_app):
+        shutil.rmtree(old_app)
+
+    shutil.copytree(new_app, old_app)
+
+    subprocess.Popen(
+        ["open", old_app],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+finally:
+    try:
+        os.remove({updater_script!r})
+    except Exception:
+        pass
+'''
+
+    with open(
+        updater_script,
+        "w",
+        encoding="utf-8",
+    ) as file:
+        file.write(script)
+
+    subprocess.Popen(
+        [
+            "python3",
+            updater_script,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    return True
