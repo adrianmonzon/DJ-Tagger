@@ -18,7 +18,10 @@ GITHUB_API_URL = (
 
 
 def version_tuple(version):
-    return tuple(int(part) for part in version.lstrip("v").split("."))
+    return tuple(
+        int(part)
+        for part in version.lstrip("v").split(".")
+    )
 
 
 def _create_ssl_context():
@@ -55,16 +58,16 @@ def check_for_update():
         latest_version = data["tag_name"].lstrip("v")
 
         if version_tuple(latest_version) > version_tuple(APP_VERSION):
+
             download_url = None
 
             for asset in data.get("assets", []):
                 name = asset.get("name", "")
 
-                if (
-                    name.lower().endswith(".zip")
-                    and "macos" in name.lower()
-                ):
-                    download_url = asset.get("browser_download_url")
+                if name.lower() == "dj tagger-macos.zip":
+                    download_url = asset.get(
+                        "browser_download_url"
+                    )
                     break
 
             return {
@@ -95,10 +98,6 @@ def check_for_update():
 
 
 def download_update(download_url):
-    """
-    Descarga la nueva versión y devuelve la ruta del ZIP descargado.
-    """
-
     if not download_url:
         raise RuntimeError(
             "No se encontró el ZIP de la nueva versión."
@@ -126,7 +125,10 @@ def download_update(download_url):
         request,
         timeout=60,
         context=context,
-    ) as response, open(zip_path, "wb") as output_file:
+    ) as response, open(
+        zip_path,
+        "wb",
+    ) as output_file:
         shutil.copyfileobj(
             response,
             output_file,
@@ -136,23 +138,10 @@ def download_update(download_url):
 
 
 def install_update(zip_path):
-    """
-    Prepara la instalación de la nueva versión.
-
-    Devuelve True si el proceso de actualización ha sido iniciado.
-    """
-
     if not os.path.isfile(zip_path):
         raise FileNotFoundError(
             f"No se encontró el archivo descargado: {zip_path}"
         )
-
-    app_path = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "DJ Tagger.app",
-        )
-    )
 
     extract_dir = tempfile.mkdtemp(
         prefix="dj_tagger_extract_"
@@ -174,6 +163,18 @@ def install_update(zip_path):
             "El ZIP descargado no contiene 'DJ Tagger.app'."
         )
 
+    current_app_path = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "DJ Tagger.app",
+        )
+    )
+
+    if ".app/Contents/" in current_app_path:
+        current_app_path = current_app_path.split(
+            ".app/Contents/"
+        )[0] + ".app"
+
     updater_script = os.path.join(
         tempfile.gettempdir(),
         "dj_tagger_apply_update.py",
@@ -184,8 +185,9 @@ import shutil
 import subprocess
 import time
 
-old_app = {app_path!r}
+old_app = {current_app_path!r}
 new_app = {new_app_path!r}
+updater_script = {updater_script!r}
 
 time.sleep(2)
 
@@ -193,7 +195,10 @@ try:
     if os.path.exists(old_app):
         shutil.rmtree(old_app)
 
-    shutil.copytree(new_app, old_app)
+    shutil.copytree(
+        new_app,
+        old_app,
+    )
 
     subprocess.Popen(
         ["open", old_app],
@@ -203,7 +208,7 @@ try:
 
 finally:
     try:
-        os.remove({updater_script!r})
+        os.remove(updater_script)
     except Exception:
         pass
 '''
