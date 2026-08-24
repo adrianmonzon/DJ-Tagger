@@ -54,10 +54,23 @@ jobs:
             --osx-bundle-identifier "com.adrianmonzon.djtagger" \
             dj_tagger_gui.py
 
+          PLIST="dist/DJ Tagger.app/Contents/Info.plist"
+
           /usr/libexec/PlistBuddy \
-            -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.VERSION }}" \
-            -c "Set :CFBundleVersion ${{ steps.version.outputs.VERSION }}" \
-            "dist/DJ Tagger.app/Contents/Info.plist"
+            -c "Delete :CFBundleShortVersionString" "$PLIST" 2>/dev/null || true
+
+          /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleShortVersionString string ${{ steps.version.outputs.VERSION }}" "$PLIST"
+
+          /usr/libexec/PlistBuddy \
+            -c "Delete :CFBundleVersion" "$PLIST" 2>/dev/null || true
+
+          /usr/libexec/PlistBuddy \
+            -c "Add :CFBundleVersion string ${{ steps.version.outputs.VERSION }}" "$PLIST"
+
+          echo "Versión incluida en Info.plist:"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST"
 
       - name: Crear ZIP para actualizaciones
         run: |
