@@ -31,7 +31,7 @@ jobs:
       - name: Calcular versión
         id: version
         run: |
-          VERSION="1.0.${{ github.run_number }}"
+          VERSION=$(python -c 'from version import APP_VERSION; print(APP_VERSION)')
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Construyendo DJ Tagger $VERSION"
 
@@ -43,11 +43,6 @@ jobs:
           DJ_TAGGER_DEFAULT_SEARCH_URL=$DEFAULT_SEARCH_URL
           EOF
 
-      - name: Actualizar versión de la aplicación
-        run: |
-          cat > version.py <<EOF
-          APP_VERSION = "${{ steps.version.outputs.VERSION }}"
-          EOF
 
       - name: Crear aplicación
         run: |
@@ -56,7 +51,13 @@ jobs:
             --windowed \
             --noconfirm \
             --clean \
+            --osx-bundle-identifier "com.adrianmonzon.djtagger" \
             dj_tagger_gui.py
+
+          /usr/libexec/PlistBuddy \
+            -c "Set :CFBundleShortVersionString ${{ steps.version.outputs.VERSION }}" \
+            -c "Set :CFBundleVersion ${{ steps.version.outputs.VERSION }}" \
+            "dist/DJ Tagger.app/Contents/Info.plist"
 
       - name: Crear ZIP para actualizaciones
         run: |
