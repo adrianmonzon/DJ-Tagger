@@ -39,10 +39,24 @@ jobs:
         env:
           DEFAULT_SEARCH_URL: ${{ secrets.DJ_TAGGER_DEFAULT_SEARCH_URL }}
         run: |
-          cat > .env <<EOF
+          cat > .env <<EOF2
           DJ_TAGGER_DEFAULT_SEARCH_URL=$DEFAULT_SEARCH_URL
-          EOF
+          EOF2
 
+      - name: Crear archivo de versión de macOS
+        run: |
+          cat > app_version.txt <<EOF2
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleShortVersionString</key>
+              <string>${{ steps.version.outputs.VERSION }}</string>
+              <key>CFBundleVersion</key>
+              <string>${{ steps.version.outputs.VERSION }}</string>
+          </dict>
+          </plist>
+          EOF2
 
       - name: Crear aplicación
         run: |
@@ -57,20 +71,29 @@ jobs:
           PLIST="dist/DJ Tagger.app/Contents/Info.plist"
 
           /usr/libexec/PlistBuddy \
-            -c "Delete :CFBundleShortVersionString" "$PLIST" 2>/dev/null || true
+            -c "Delete :CFBundleShortVersionString" \
+            "$PLIST" 2>/dev/null || true
 
           /usr/libexec/PlistBuddy \
-            -c "Add :CFBundleShortVersionString string ${{ steps.version.outputs.VERSION }}" "$PLIST"
+            -c "Add :CFBundleShortVersionString string ${{ steps.version.outputs.VERSION }}" \
+            "$PLIST"
 
           /usr/libexec/PlistBuddy \
-            -c "Delete :CFBundleVersion" "$PLIST" 2>/dev/null || true
+            -c "Delete :CFBundleVersion" \
+            "$PLIST" 2>/dev/null || true
 
           /usr/libexec/PlistBuddy \
-            -c "Add :CFBundleVersion string ${{ steps.version.outputs.VERSION }}" "$PLIST"
+            -c "Add :CFBundleVersion string ${{ steps.version.outputs.VERSION }}" \
+            "$PLIST"
 
-          echo "Versión incluida en Info.plist:"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST"
+          echo "Versión:"
+          plutil -p "$PLIST" | grep -E "CFBundle(Name|DisplayName|ShortVersionString|Version)"
+
+          echo "Firmando aplicación..."
+          codesign --force --deep --sign - "dist/DJ Tagger.app"
+
+          echo "Comprobando firma..."
+          codesign --verify --deep --strict --verbose=2 "dist/DJ Tagger.app"
 
       - name: Crear ZIP para actualizaciones
         run: |
@@ -80,6 +103,7 @@ jobs:
 
       - name: Crear DMG
         run: |
+          rm -rf dmg
           mkdir -p dmg
           cp -R "dist/DJ Tagger.app" "dmg/"
 
