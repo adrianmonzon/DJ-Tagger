@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from pathlib import Path
 """
 dj_tagger_gui.py — Interfaz gráfica para DJ Tagger
 
@@ -71,6 +72,223 @@ class DJTaggerApp:
         ).start()
 
     # ---------- Construcción de la interfaz ----------
+
+    def _poll_log_queue(self):
+        try:
+            while True:
+                message = self.log_queue.get_nowait()
+
+                self.log_text.configure(state="normal")
+                self.log_text.insert("end", str(message))
+                self.log_text.see("end")
+                self.log_text.configure(state="disabled")
+
+        except queue.Empty:
+            pass
+
+        self.root.after(100, self._poll_log_queue)
+
+    def _log(self, message):
+        try:
+            self.log_queue.put(str(message))
+        except Exception:
+            pass
+
+    def _run_in_thread(self, target, *args):
+        import threading
+
+        thread = threading.Thread(
+            target=target,
+            args=args,
+            daemon=True,
+        )
+        thread.start()
+        return thread
+
+    def _shorten_filename(self, filename, max_length=32):
+        filename = str(filename)
+
+        if len(filename) <= max_length:
+            return filename
+
+        path = Path(filename)
+        suffix = path.suffix
+
+        if suffix and len(suffix) < max_length:
+            available = max_length - len(suffix) - 3
+            if available < 1:
+                return "..." + suffix
+            return filename[:available] + "..." + suffix
+
+        return filename[:max_length - 3] + "..."
+
+    def _clear_processing_entries(self):
+        entries = getattr(
+            self,
+            "_processing_entries",
+            {},
+        )
+
+        for entry in list(entries.values()):
+            try:
+                entry.destroy()
+            except tk.TclError:
+                pass
+
+        self._processing_entries = {}
+
+    def _reset_processing_area(self):
+        # ----------------------------------------------------
+        # Eliminar campos editables.
+        # ----------------------------------------------------
+
+        entries = getattr(
+            self,
+            "_processing_entries",
+            {},
+        )
+
+        for entry in list(entries.values()):
+            try:
+                entry.destroy()
+            except Exception:
+                pass
+
+        self._processing_entries = {}
+
+        # ----------------------------------------------------
+        # ELIMINAR BOTONES
+        # ----------------------------------------------------
+
+        buttons = getattr(
+            self,
+            "processing_buttons_frame",
+            None,
+        )
+
+        if buttons is not None:
+            try:
+                buttons.destroy()
+            except Exception:
+                pass
+
+        self.processing_buttons_frame = None
+        self.processing_confirm_button = None
+        self.processing_cancel_button = None
+
+        # ----------------------------------------------------
+        # Vaciar tabla.
+        # ----------------------------------------------------
+
+        tree = getattr(
+            self,
+            "processing_tree",
+            None,
+        )
+
+        if tree is not None:
+            try:
+                for item in tree.get_children():
+                    tree.delete(item)
+            except Exception:
+                pass
+
+        # ----------------------------------------------------
+        # Ocultar procesamiento.
+        # ----------------------------------------------------
+
+        frame = getattr(
+            self,
+            "processing_frame",
+            None,
+        )
+
+        if frame is not None:
+            try:
+                frame.pack_forget()
+            except Exception:
+                try:
+                    frame.place_forget()
+                except Exception:
+                    pass
+
+        # ----------------------------------------------------
+        # VOLVER A LA CAJA INICIAL
+        # ----------------------------------------------------
+
+        drop_label = getattr(
+            self,
+            "drop_label",
+            None,
+        )
+
+        if drop_label is not None:
+            try:
+                drop_label.pack(
+                    fill="both",
+                    expand=True,
+                    padx=20,
+                    pady=20,
+                )
+            except Exception:
+                pass
+
+        self._processing_paths = {}
+        self._processing_results = []
+        self._processing_edit = None
+        self._processing_total = 0
+        self._processing_done = 0
+
+    def _update_processing_row(
+        self,
+        filepath,
+        status,
+        error="",
+        title="",
+        artist="",
+    ):
+        def update():
+            target_item = None
+
+            for item, path in self._processing_paths.items():
+                if path == filepath:
+                    target_item = item
+                    break
+
+            if target_item is None:
+                return
+
+            values = (
+                self._shorten_filename(
+                    Path(filepath).name
+                ),
+                title,
+                artist,
+                status,
+            )
+
+            self.processing_tree.item(
+                target_item,
+                values=values,
+            )
+
+        self.root.after(0, update)
+
+    def _check_for_updates(self):
+        try:
+            updater = getattr(core, "check_for_updates", None)
+
+            if updater is None:
+                return
+
+            self._run_in_thread(
+                updater
+            )
+
+        except Exception as exc:
+            self._log(
+                f"Error comprobando actualizaciones: {exc}\n"
+            )
 
     def _build_ui(self):
         pad = {"padx": 10, "pady": 6}
@@ -211,7 +429,7 @@ class DJTaggerApp:
 
         self.library_tree = ttk.Treeview(
             list_frame,
-            columns=("check", "song", "artist"),
+            columns=("check", "song", "artist", "type"),
             show="headings",
             yscrollcommand=lib_scroll.set,
             height=10,
@@ -219,8 +437,10 @@ class DJTaggerApp:
         )
 
         self.library_tree.heading("check", text="✓")
+        self.library_tree.heading("type", text="Tipo")
         self.library_tree.heading("song", text="Canción")
         self.library_tree.heading("artist", text="Artista")
+        self.library_tree.heading("type", text="Tipo")
 
         self.library_tree.column(
             "check",
@@ -228,15 +448,31 @@ class DJTaggerApp:
             anchor="center",
             stretch=False,
         )
+
+        self.library_tree.column(
+            "type",
+            width=90,
+            anchor="center",
+            stretch=False,
+        )
+
         self.library_tree.column(
             "song",
-            width=290,
+            width=270,
             anchor="w",
         )
+
         self.library_tree.column(
             "artist",
             width=190,
             anchor="w",
+        )
+
+        self.library_tree.column(
+            "type",
+            width=100,
+            anchor="center",
+            stretch=False,
         )
 
         lib_scroll.configure(
@@ -386,6 +622,279 @@ class DJTaggerApp:
             expand=True,
         )
 
+        # Lista de procesamiento dentro de la pestaña.
+        self.processing_frame = ttk.Frame(self.drop_frame)
+
+        self.processing_title = ttk.Label(
+            self.processing_frame,
+            text="Procesando canciones...",
+            font=("Helvetica", 13, "bold"),
+        )
+        self.processing_title.pack(
+            anchor="w",
+            padx=12,
+            pady=(10, 6),
+        )
+
+        # =========================================================
+        # TABLA DE RESULTADOS
+        # =========================================================
+
+        self.processing_table_outer = ttk.Frame(
+            self.processing_frame
+        )
+        self.processing_table_outer.pack(
+            fill="both",
+            expand=True,
+            padx=10,
+            pady=(0, 10),
+        )
+
+        # Canvas horizontal: cabecera + contenido se desplazan juntos.
+        self.processing_horizontal_canvas = tk.Canvas(
+            self.processing_table_outer,
+            highlightthickness=0,
+            bd=0,
+        )
+
+        self.processing_horizontal_canvas.pack(
+            side="top",
+            fill="both",
+            expand=True,
+        )
+
+        self.processing_horizontal_inner = ttk.Frame(
+            self.processing_horizontal_canvas
+        )
+
+        self.processing_horizontal_window = (
+            self.processing_horizontal_canvas.create_window(
+                (0, 0),
+                window=self.processing_horizontal_inner,
+                anchor="nw",
+            )
+        )
+
+        # ---------------------------------------------------------
+        # CABECERA REAL
+        # ---------------------------------------------------------
+
+        self.processing_header = tk.Frame(
+            self.processing_horizontal_inner,
+            bg="#e5e5e5",
+            height=52,
+            bd=1,
+            relief="solid",
+        )
+
+        self.processing_header.pack(
+            fill="x",
+            side="top",
+        )
+
+        self.processing_header.pack_propagate(False)
+
+        widths = [180, 240, 210, 90]
+
+        for i, width in enumerate(widths):
+            self.processing_header.grid_columnconfigure(
+                i,
+                minsize=width,
+                weight=0,
+            )
+
+        header_font = (
+            "Helvetica",
+            10,
+            "bold",
+        )
+
+        def header(text, row, column, rowspan=1, columnspan=1):
+            label = tk.Label(
+                self.processing_header,
+                text=text,
+                bg="#e5e5e5",
+                font=header_font,
+                relief="solid",
+                bd=1,
+                anchor="center",
+            )
+            label.grid(
+                row=row,
+                column=column,
+                rowspan=rowspan,
+                columnspan=columnspan,
+                sticky="nsew",
+            )
+            return label
+
+        self.processing_header_archivo = header(
+            "Archivo",
+            0,
+            0,
+            rowspan=2,
+        )
+
+        self.processing_header_resultado = header(
+            "Resultado",
+            0,
+            1,
+            columnspan=2,
+        )
+
+        self.processing_header_estado = header(
+            "Estado",
+            0,
+            3,
+            rowspan=2,
+        )
+
+        self.processing_header_cancion = header(
+            "Canción",
+            1,
+            1,
+        )
+
+        self.processing_header_artista = header(
+            "Artista",
+            1,
+            2,
+        )
+
+        # ---------------------------------------------------------
+        # CUERPO
+        # ---------------------------------------------------------
+
+        self.processing_body_frame = ttk.Frame(
+            self.processing_horizontal_inner
+        )
+
+        self.processing_body_frame.pack(
+            fill="both",
+            expand=True,
+        )
+
+        self.processing_tree = ttk.Treeview(
+            self.processing_body_frame,
+            columns=(
+                "archivo",
+                "cancion",
+                "artista",
+                "estado",
+            ),
+            show="",
+            selectmode="browse",
+            height=10,
+        )
+
+        for column in (
+            "archivo",
+            "cancion",
+            "artista",
+            "estado",
+        ):
+            self.processing_tree.heading(
+                column,
+                text="",
+            )
+
+        self.processing_tree.column(
+            "archivo",
+            width=180,
+            minwidth=180,
+            anchor="w",
+            stretch=False,
+        )
+
+        self.processing_tree.column(
+            "cancion",
+            width=240,
+            minwidth=200,
+            anchor="w",
+            stretch=False,
+        )
+
+        self.processing_tree.column(
+            "artista",
+            width=210,
+            minwidth=180,
+            anchor="w",
+            stretch=False,
+        )
+
+        self.processing_tree.column(
+            "estado",
+            width=90,
+            minwidth=90,
+            anchor="center",
+            stretch=False,
+        )
+
+        # Scroll vertical.
+        self.processing_scrollbar_y = ttk.Scrollbar(
+            self.processing_body_frame,
+            orient="vertical",
+            command=self.processing_tree.yview,
+        )
+
+        self.processing_tree.configure(
+            yscrollcommand=self.processing_scrollbar_y.set,
+        )
+
+        self.processing_tree.pack(
+            side="left",
+            fill="both",
+            expand=True,
+        )
+
+        self.processing_scrollbar_y.pack(
+            side="right",
+            fill="y",
+        )
+
+        # ---------------------------------------------------------
+        # SCROLL HORIZONTAL REAL
+        # ---------------------------------------------------------
+
+        self.processing_scrollbar_x = ttk.Scrollbar(
+            self.processing_table_outer,
+            orient="horizontal",
+            command=self.processing_horizontal_canvas.xview,
+        )
+
+        self.processing_scrollbar_x.pack(
+            side="bottom",
+            fill="x",
+        )
+
+        self.processing_horizontal_canvas.configure(
+            xscrollcommand=self.processing_scrollbar_x.set,
+        )
+
+        # El contenido tiene una anchura fija superior a la ventana
+        # cuando sea necesario, por lo que la barra aparece.
+        total_width = sum(widths)
+
+        self.processing_horizontal_inner.configure(
+            width=total_width
+        )
+
+        self.processing_horizontal_canvas.configure(
+            scrollregion=(0, 0, total_width, 500)
+        )
+
+        # Doble clic para editar Canción / Artista.
+        self.processing_tree.bind(
+            "<Double-1>",
+            self._edit_processing_cell,
+        )
+
+        self._processing_paths = {}
+        self._processing_results = []
+        self._processing_edit = None
+
+        self.processing_frame.pack_forget()
+
         ttk.Button(
             tab_rename,
             text="O elegir MP3...",
@@ -447,226 +956,985 @@ class DJTaggerApp:
             pady=6,
         )
 
-    # ---------- Utilidades de log ----------
-
-    def _log(self, message: str):
-        self.log_text.configure(state="normal")
-        self.log_text.insert(
-            "end",
-            message if message.endswith("\n") else message + "\n",
-        )
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
-
-    def _poll_log_queue(self):
-        try:
-            while True:
-                message = self.log_queue.get_nowait()
-                self._log(message)
-        except queue.Empty:
-            pass
-
-        self.root.after(
-            150,
-            self._poll_log_queue,
-        )
-
-    def _run_in_thread(self, target, *args):
-        import sys
-
-        def wrapper():
-            old_stdout = sys.stdout
-            sys.stdout = TextRedirector(self.log_queue)
-
-            try:
-                target(*args)
-            except Exception as e:
-                self.log_queue.put(f"ERROR: {e}")
-            finally:
-                sys.stdout = old_stdout
-
-        t = threading.Thread(
-            target=wrapper,
-            daemon=True,
-        )
-        t.start()
-
-        return t
-
-    # ---------- Actualizaciones ----------
-
-    def _check_for_updates(self):
-        """Comprueba en segundo plano si existe una versión más reciente."""
-
-        result = check_for_update()
-
-        if not result.get("available"):
-            return
-
-        latest_version = result.get("latest_version")
-        download_url = result.get("download_url")
-
-        if not latest_version or not download_url:
-            return
-
-        self.root.after(
-            0,
-            lambda: self._show_update_available(
-                latest_version,
-                download_url,
-            ),
-        )
-
-    def _show_update_available(
-        self,
-        latest_version,
-        download_url,
-    ):
-        """Muestra el aviso de actualización en el hilo de la interfaz."""
-
-        update = messagebox.askyesno(
-            "Actualización disponible",
-            (
-                f"Hay una nueva versión de DJ Tagger.\n\n"
-                f"Versión actual: {APP_VERSION}\n"
-                f"Nueva versión: {latest_version}\n\n"
-                "¿Quieres abrir la página de descarga?"
-            ),
-        )
-
-        if update:
-            webbrowser.open(download_url)
-
-    # ---------- Acciones: vigilar carpeta ----------
-
-    def _choose_watch_folder(self):
-        folder = filedialog.askdirectory(
-            title="Elige la carpeta a vigilar",
-        )
-
-        if folder:
-            self.watch_folder_path = folder
-            self.watch_path_var.set(folder)
-            self.watch_toggle_btn.configure(
-                state="normal",
-            )
-
-    def _toggle_watch(self):
-        if not self.watching:
-            self.watching = True
-            self.watch_toggle_btn.configure(
-                text="Parar de vigilar",
-            )
-            self._log(
-                f"Vigilando: {self.watch_folder_path}"
-            )
-            self.watch_thread = self._run_in_thread(
-                self._watch_loop,
-                self.watch_folder_path,
-            )
-        else:
-            self.watching = False
-            self.watch_toggle_btn.configure(
-                text="Empezar a vigilar",
-            )
-            self._log(
-                "Vigilancia detenida."
-            )
-
-    def _watch_loop(self, folder):
-        seen = set(os.listdir(folder))
-
-        while self.watching:
-            time.sleep(3)
-
-            if not self.watching:
-                break
-
-            current = set(os.listdir(folder))
-            new_files = current - seen
-
-            for f in new_files:
-                if f.lower().endswith(".mp3"):
-                    time.sleep(2)
-                    core.process_file(
-                        os.path.join(folder, f)
-                    )
-
-            seen = current
-
-    # ---------- Acciones: lote ----------
-
-    def _run_batch(self):
-        folder = filedialog.askdirectory(
-            title="Elige la carpeta a procesar",
-        )
-
-        if not folder:
-            return
-
-        self._run_in_thread(
-            core.process_folder_batch,
-            folder,
-        )
-
-    # ---------- Acciones: manual ----------
-
-    def _choose_and_process_mp3s(self):
-        files = filedialog.askopenfilenames(
-            title="Selecciona los MP3",
-            filetypes=[
-                ("Archivos MP3", "*.mp3"),
-                ("Todos los archivos", "*"),
-            ],
-        )
-
-        self._process_dropped_files(files)
-
     def _on_mp3_drop(self, event):
         try:
             files = self.root.tk.splitlist(event.data)
         except Exception:
             files = [event.data]
 
-        self._process_dropped_files(files)
-
-    def _process_dropped_files(self, files):
         mp3_files = [
-            os.path.abspath(f)
-            for f in files
-            if str(f).lower().endswith(".mp3")
-            and os.path.isfile(f)
+            str(filepath)
+            for filepath in files
+            if str(filepath).lower().endswith(".mp3")
         ]
 
         if not mp3_files:
             messagebox.showwarning(
                 "DJ Tagger",
-                "No se han encontrado archivos MP3 válidos.",
+                "No se han encontrado archivos MP3.",
             )
             return
 
-        self._log(
-            f"\nProcesando {len(mp3_files)} MP3...\n"
-        )
+        self._process_dropped_files(mp3_files)
+
+    def _process_dropped_files(self, files):
+        mp3_files = [
+            str(filepath)
+            for filepath in files
+            if str(filepath).lower().endswith(".mp3")
+        ]
+
+        if not mp3_files:
+            return
+
+        self._show_processing_area(mp3_files)
 
         self._run_in_thread(
-            self._process_mp3_files_worker,
+            self._process_files_worker,
             mp3_files,
         )
 
-    def _process_mp3_files_worker(self, files):
-        for filepath in files:
+    def _process_files_worker(
+        self,
+        files,
+    ):
+        total = len(files)
+
+        for index, filepath in enumerate(
+            files,
+            start=1,
+        ):
             try:
-                core.process_file(
+                result = core.process_file(
                     filepath,
-                    rename_file=True,
-                )
-            except Exception as exc:
-                print(
-                    f"  ERROR procesando {os.path.basename(filepath)}: {exc}"
+                    preview_only=True,
                 )
 
-        print("\nProceso terminado.")
+            except Exception as exc:
+                result = {
+                    "success": False,
+                    "filepath": filepath,
+                    "original_filename": os.path.basename(filepath),
+                    "error": str(exc),
+                }
+
+            self.root.after(
+                0,
+                lambda r=result, i=index, t=total:
+                    self._append_processing_result_row(
+                        r,
+                        i,
+                        t,
+                    ),
+            )
+
+        # No mostrar botones de confirmación hasta
+        # que TODAS las canciones hayan terminado.
+        self.root.after(
+            100,
+            self._finish_processing_preview,
+        )
+
+
+    def _show_processing_area(self, files):
+        self.drop_label.pack_forget()
+
+        self.processing_frame.pack(
+            fill="both",
+            expand=True,
+        )
+
+        self.processing_title.configure(
+            text=f"0 de {len(files)} canciones procesadas"
+        )
+
+        # Limpiar Entries anteriores.
+        entries = getattr(
+            self,
+            "_processing_entries",
+            {},
+        )
+
+        for entry in list(entries.values()):
+            try:
+                entry.destroy()
+            except Exception:
+                pass
+
+        self._processing_entries = {}
+
+        # Limpiar tabla.
+        for item in self.processing_tree.get_children():
+            self.processing_tree.delete(item)
+
+        self._processing_paths = {}
+        self._processing_results = []
+        self._processing_total = len(files)
+        self._processing_done = 0
+
+        # Crear una fila fija para cada canción.
+        for index, filepath in enumerate(files):
+            item_id = f"processing_{index}"
+
+            self.processing_tree.insert(
+                "",
+                "end",
+                iid=item_id,
+                values=(
+                    self._shorten_filename(
+                        os.path.basename(filepath)
+                    ),
+                    "",
+                    "",
+                    "Procesando...",
+                ),
+            )
+
+            self._processing_paths[item_id] = filepath
+
+        self.processing_tree.update_idletasks()
+
+        # Todavía no mostrar botones.
+        old = getattr(
+            self,
+            "processing_buttons_frame",
+            None,
+        )
+
+        if old is not None:
+            try:
+                old.destroy()
+            except Exception:
+                pass
+
+        self.processing_buttons_frame = None
+
+    def _scroll_processing_horizontal(self, *args):
+        """Mueve horizontalmente el cuerpo y la cabecera al mismo tiempo."""
+        self.processing_tree.xview(*args)
+        if hasattr(self, "processing_header_canvas"):
+            try:
+                self.processing_header_canvas.xview(*args)
+            except Exception:
+                pass
+
+    def _update_processing_header_width(self, event=None):
+        """Mantiene la cabecera con el mismo ancho que la tabla."""
+        if not hasattr(self, "processing_tree"):
+            return
+        if not hasattr(self, "processing_header_inner"):
+            return
+
+        try:
+            total_width = sum(
+                self.processing_tree.column(column, "width")
+                for column in (
+                    "archivo",
+                    "cancion",
+                    "artista",
+                    "estado",
+                )
+            )
+
+            self.processing_header_canvas.configure(
+                scrollregion=(0, 0, total_width, 52)
+            )
+
+            self.processing_header_inner.configure(
+                width=total_width
+            )
+
+            self.processing_header_canvas.itemconfigure(
+                self.processing_header_window,
+                width=total_width,
+            )
+        except Exception:
+            pass
+
+    def _edit_processing_cell(self, event):
+        region = self.processing_tree.identify(
+            "region",
+            event.x,
+            event.y,
+        )
+
+        if region != "cell":
+            return
+
+        row = self.processing_tree.identify_row(event.y)
+        column = self.processing_tree.identify_column(event.x)
+
+        # Solo Canción y Artista son editables.
+        if not row or column not in ("#2", "#3"):
+            return
+
+        bbox = self.processing_tree.bbox(
+            row,
+            column,
+        )
+
+        if not bbox:
+            return
+
+        x, y, width, height = bbox
+
+        values = list(
+            self.processing_tree.item(
+                row,
+                "values",
+            )
+        )
+
+        column_index = 1 if column == "#2" else 2
+
+        if len(values) <= column_index:
+            return
+
+        old_value = values[column_index]
+
+        if self._processing_edit is not None:
+            try:
+                self._processing_edit.destroy()
+            except Exception:
+                pass
+
+        entry = tk.Entry(
+            self.processing_tree,
+            relief="solid",
+            bd=1,
+            highlightthickness=1,
+            font=("Helvetica", 10),
+        )
+
+        entry.insert(
+            0,
+            old_value,
+        )
+
+        entry.select_range(
+            0,
+            "end",
+        )
+
+        entry.place(
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+        )
+
+        self._processing_edit = entry
+
+        def save(event=None):
+            new_value = entry.get().strip()
+
+            values[column_index] = new_value
+
+            self.processing_tree.item(
+                row,
+                values=tuple(values),
+            )
+
+            filepath = self._processing_paths.get(row)
+
+            if filepath:
+                for result in self._processing_results:
+                    if result.get("filepath") == filepath:
+                        if column_index == 1:
+                            result["title"] = new_value
+                        elif column_index == 2:
+                            result["artist"] = new_value
+                        break
+
+            try:
+                entry.destroy()
+            except Exception:
+                pass
+
+            self._processing_edit = None
+
+        def cancel(event=None):
+            try:
+                entry.destroy()
+            except Exception:
+                pass
+
+            self._processing_edit = None
+
+        entry.bind(
+            "<Return>",
+            save,
+        )
+
+        entry.bind(
+            "<Escape>",
+            cancel,
+        )
+
+        entry.bind(
+            "<FocusOut>",
+            save,
+        )
+
+        entry.focus_set()
+
+    def _confirm_processing_preview(
+        self,
+        event=None,
+        results=None,
+    ):
+        """
+        Confirma la previsualización y procesa definitivamente
+        todas las canciones válidas.
+        """
+
+        source_results = (
+            results
+            if results is not None
+            else getattr(
+                self,
+                "_processing_results",
+                [],
+            )
+        )
+
+        # Asegurarnos de trabajar con una lista real.
+        source_results = list(
+            source_results or []
+        )
+
+        valid_results = []
+
+        for index, result in enumerate(
+            source_results
+        ):
+            if not isinstance(result, dict):
+                continue
+
+            filepath = result.get(
+                "filepath",
+                "",
+            )
+
+            if not filepath:
+                continue
+
+            # La fila correspondiente.
+            item_id = f"processing_{index}"
+
+            # Recuperar los valores actualmente escritos
+            # en los campos editables.
+            title_entry = getattr(
+                self,
+                "_processing_entries",
+                {},
+            ).get(
+                (item_id, "cancion")
+            )
+
+            artist_entry = getattr(
+                self,
+                "_processing_entries",
+                {},
+            ).get(
+                (item_id, "artista")
+            )
+
+            if title_entry is not None:
+                try:
+                    title = title_entry.get().strip()
+                except tk.TclError:
+                    title = str(
+                        result.get("title", "")
+                    ).strip()
+            else:
+                title = str(
+                    result.get("title", "")
+                ).strip()
+
+            if artist_entry is not None:
+                try:
+                    artist = artist_entry.get().strip()
+                except tk.TclError:
+                    artist = str(
+                        result.get("artist", "")
+                    ).strip()
+            else:
+                artist = str(
+                    result.get("artist", "")
+                ).strip()
+
+            if not title or not artist:
+                continue
+
+            # Actualizar el propio resultado con los valores
+            # definitivos editados por el usuario.
+            result["title"] = title
+            result["artist"] = artist
+
+            valid_results.append(result)
+
+        if not valid_results:
+            messagebox.showwarning(
+                "DJ Tagger",
+                "No hay canciones válidas para procesar.",
+            )
+            return
+
+        # Desactivar botones para evitar dobles clics.
+        buttons = getattr(
+            self,
+            "processing_buttons_frame",
+            None,
+        )
+
+        if buttons is not None:
+            for child in buttons.winfo_children():
+                try:
+                    child.configure(
+                        state="disabled"
+                    )
+                except tk.TclError:
+                    pass
+
+        self.processing_title.configure(
+            text=(
+                f"Procesando 0 de "
+                f"{len(valid_results)} canciones..."
+            )
+        )
+
+        # Procesamiento definitivo en segundo plano.
+        self._run_in_thread(
+            self._process_confirmed_files_worker,
+            valid_results,
+        )
+
+
+    def _cancel_processing_preview(self):
+        self._reset_processing_area()
+
+    def _create_processing_editors(
+        self,
+        item_id,
+        title,
+        artist,
+    ):
+        self.processing_tree.update_idletasks()
+
+        def create_editor(column, value):
+            bbox = self.processing_tree.bbox(
+                item_id,
+                column,
+            )
+
+            if not bbox:
+                self.root.after(
+                    30,
+                    lambda: self._create_processing_editors(
+                        item_id,
+                        title,
+                        artist,
+                    ),
+                )
+                return
+
+            x, y, width, height = bbox
+
+            entry = tk.Entry(
+                self.processing_tree,
+                relief="solid",
+                bd=1,
+                highlightthickness=0,
+                font=("Helvetica", 10),
+            )
+
+            entry.insert(
+                0,
+                value,
+            )
+
+            entry.place(
+                x=x + 1,
+                y=y + 1,
+                width=max(width - 2, 30),
+                height=max(height - 2, 20),
+            )
+
+            self._processing_entries[
+                (item_id, column)
+            ] = entry
+
+            def save(event=None):
+                current_title = self._processing_entries.get(
+                    (item_id, "cancion")
+                )
+
+                current_artist = self._processing_entries.get(
+                    (item_id, "artista")
+                )
+
+                for result_item in self._processing_results:
+                    if result_item.get("filepath") == self._processing_paths.get(item_id):
+                        if current_title is not None:
+                            result_item["title"] = (
+                                current_title.get().strip()
+                            )
+
+                        if current_artist is not None:
+                            result_item["artist"] = (
+                                current_artist.get().strip()
+                            )
+
+                        break
+
+            entry.bind(
+                "<FocusOut>",
+                save,
+            )
+
+            entry.bind(
+                "<Return>",
+                save,
+            )
+
+        create_editor(
+            "cancion",
+            title,
+        )
+
+        create_editor(
+            "artista",
+            artist,
+        )
+
+
+    def _finish_processing_preview(self):
+        total = getattr(
+            self,
+            "_processing_total",
+            0,
+        )
+
+        done = getattr(
+            self,
+            "_processing_done",
+            0,
+        )
+
+        self.processing_title.configure(
+            text=(
+                f"{done} de {total} "
+                f"canciones procesadas"
+            )
+        )
+
+        self._show_processing_action_buttons()
+
+
+    def _append_processing_result_row(
+        self,
+        result,
+        index,
+        total,
+    ):
+        filepath = str(
+            result.get("filepath", "")
+        )
+
+        item_id = f"processing_{index - 1}"
+
+        if not self.processing_tree.exists(item_id):
+            return
+
+        self._processing_paths[item_id] = filepath
+
+        success = bool(result.get("success"))
+
+        if success:
+            title = str(
+                result.get("title", "")
+            ).strip()
+
+            artist = str(
+                result.get("artist", "")
+            ).strip()
+
+            status = "✓"
+        else:
+            title = ""
+            artist = ""
+
+            error = str(
+                result.get("error", "")
+            ).strip()
+
+            status = "ERROR"
+
+        # Actualizar únicamente ESTA fila.
+        self.processing_tree.item(
+            item_id,
+            values=(
+                self._shorten_filename(
+                    os.path.basename(filepath)
+                ),
+                "",
+                "",
+                status,
+            ),
+        )
+
+        # Eliminar Entry anteriores de esta fila si existen.
+        for key in [
+            (item_id, "cancion"),
+            (item_id, "artista"),
+        ]:
+            entry = self._processing_entries.pop(
+                key,
+                None,
+            )
+
+            if entry is not None:
+                try:
+                    entry.destroy()
+                except tk.TclError:
+                    pass
+
+        self._processing_results.append(result)
+
+        # Guardamos los valores que se mostrarán en los Entry.
+        self._create_processing_editors(
+            item_id,
+            title,
+            artist,
+        )
+
+        self._processing_done = index
+
+        self.processing_title.configure(
+            text=(
+                f"{index} de {total} "
+                f"canciones procesadas"
+            )
+        )
+
+        self.processing_tree.see(item_id)
+        self.processing_tree.update_idletasks()
+
+
+    def _show_processing_preview(self, results):
+        """Compatibilidad: prepara la tabla con los resultados ya obtenidos."""
+
+        self._processing_results = list(results or [])
+
+        for item in self.processing_tree.get_children():
+            self.processing_tree.delete(item)
+
+        self._processing_paths = {}
+
+        total = len(self._processing_results)
+
+        for index, result in enumerate(
+            self._processing_results,
+            start=1,
+        ):
+            self._append_processing_result_row(
+                result,
+                index,
+                total,
+            )
+
+        if total:
+            self.processing_title.configure(
+                text=f"{total} de {total} canciones procesadas"
+            )
+
+        self._show_processing_action_buttons()
+
+    def _show_processing_action_buttons(self):
+        old_buttons = getattr(
+            self,
+            "processing_buttons_frame",
+            None,
+        )
+
+        if old_buttons is not None:
+            try:
+                old_buttons.destroy()
+            except Exception:
+                pass
+
+        # ====================================================
+        # PANEL INDEPENDIENTE
+        #
+        # Está directamente sobre ROOT, fuera de la tabla
+        # y fuera de processing_frame.
+        # ====================================================
+
+        buttons = tk.Frame(
+            self.root,
+            bd=0,
+            relief="flat",
+        )
+
+        self.processing_buttons_frame = buttons
+
+        # Siempre abajo de la ventana.
+        buttons.place(
+            relx=0.5,
+            rely=1.0,
+            anchor="s",
+            relwidth=0.70,
+            height=68,
+            y=-8,
+        )
+
+        # ====================================================
+        # CONFIRMAR
+        # ====================================================
+
+        confirm_button = tk.Button(
+            buttons,
+            text="Confirmar y añadir",
+            command=lambda: self._confirm_processing_preview(
+                None,
+                self._processing_results,
+            ),
+            font=("Helvetica", 10),
+            padx=14,
+            pady=4,
+            bd=1,
+            relief="raised",
+        )
+
+        confirm_button.pack(
+            side="left",
+            padx=(0, 5),
+            pady=8,
+        )
+
+        # ====================================================
+        # CANCELAR
+        # ====================================================
+
+        cancel_button = tk.Button(
+            buttons,
+            text="Cancelar",
+            command=self._cancel_processing_preview,
+            font=("Helvetica", 10),
+            padx=14,
+            pady=4,
+            bd=1,
+            relief="raised",
+        )
+
+        cancel_button.pack(
+            side="left",
+            padx=(5, 0),
+            pady=8,
+        )
+
+        self.processing_confirm_button = confirm_button
+        self.processing_cancel_button = cancel_button
+
+        # Asegurarnos de que queden por encima de la tabla.
+        try:
+            buttons.lift()
+        except Exception:
+            pass
+
+    def _process_confirmed_files_worker(
+        self,
+        results,
+    ):
+        """
+        Procesa definitivamente los resultados confirmados.
+
+        Utiliza EXACTAMENTE el título y artista que aparecen
+        en la previsualización, incluyendo las modificaciones
+        realizadas por el usuario.
+        """
+
+        results = list(results or [])
+        total = len(results)
+        done = 0
+
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+
+            filepath = str(
+                result.get("filepath", "")
+            ).strip()
+
+            if not filepath:
+                continue
+
+            title = str(
+                result.get("title", "")
+            ).strip()
+
+            artist = str(
+                result.get("artist", "")
+            ).strip()
+
+            if not title or not artist:
+                continue
+
+            # Buscar la fila correspondiente.
+            item_id = None
+
+            for iid, path in getattr(
+                self,
+                "_processing_paths",
+                {},
+            ).items():
+                if str(path) == filepath:
+                    item_id = iid
+                    break
+
+            # Mostrar que esta canción se está procesando.
+            if item_id is not None:
+                try:
+                    self.root.after(
+                        0,
+                        lambda iid=item_id, t=title, a=artist:
+                            self.processing_tree.item(
+                                iid,
+                                values=(
+                                    self._shorten_filename(
+                                        os.path.basename(filepath)
+                                    ),
+                                    t,
+                                    a,
+                                    "Procesando...",
+                                ),
+                            ),
+                    )
+                except Exception:
+                    pass
+
+            try:
+                final_result = core.process_edited_file(
+                    filepath,
+                    title,
+                    artist,
+                    result,
+                )
+
+                done += 1
+
+                final_title = str(
+                    final_result.get(
+                        "title",
+                        title,
+                    )
+                )
+
+                final_artist = str(
+                    final_result.get(
+                        "artist",
+                        artist,
+                    )
+                )
+
+                if item_id is not None:
+                    self.root.after(
+                        0,
+                        lambda iid=item_id, t=final_title, a=final_artist:
+                            self.processing_tree.item(
+                                iid,
+                                values=(
+                                    self._shorten_filename(
+                                        os.path.basename(filepath)
+                                    ),
+                                    t,
+                                    a,
+                                    "✓",
+                                ),
+                            ),
+                    )
+
+            except Exception as exc:
+                done += 1
+
+                error_text = str(exc)
+
+                if item_id is not None:
+                    self.root.after(
+                        0,
+                        lambda iid=item_id, t=title, a=artist, e=error_text:
+                            self.processing_tree.item(
+                                iid,
+                                values=(
+                                    self._shorten_filename(
+                                        os.path.basename(filepath)
+                                    ),
+                                    t,
+                                    a,
+                                    "ERROR",
+                                ),
+                            ),
+                    )
+
+                self.root.after(
+                    0,
+                    lambda e=error_text:
+                        self._log(
+                            f"Error procesando archivo: {e}\n"
+                        ),
+                )
+
+            # Actualizar contador después de cada canción.
+            self.root.after(
+                0,
+                lambda d=done, t=total:
+                    self.processing_title.configure(
+                        text=(
+                            f"Procesando {d} de {t} "
+                            f"canciones..."
+                        )
+                    ),
+            )
+
+        # Terminado TODO el procesamiento.
+        self.root.after(
+            0,
+            self._finish_processing,
+        )
+
+
+
+    def _finish_processing(self):
+        try:
+            self.processing_title.configure(
+                text="Proceso terminado"
+            )
+        except Exception:
+            pass
+
+        # Quitar botones.
+        buttons = getattr(
+            self,
+            "processing_buttons_frame",
+            None,
+        )
+
+        if buttons is not None:
+            try:
+                buttons.destroy()
+            except Exception:
+                pass
+
+        self.processing_buttons_frame = None
+        self.processing_confirm_button = None
+        self.processing_cancel_button = None
+
+        # Mostrar "Proceso terminado" durante 3 segundos.
+        self.root.after(
+            3000,
+            self._reset_processing_area,
+        )
 
     def _load_library(self):
         if self.library_tracks:
@@ -802,9 +2070,23 @@ class DJTaggerApp:
                 new_tracks
             )
 
+            local_count = sum(
+                1
+                for track in new_tracks
+                if len(track) < 4 or track[3] == "local"
+            )
+
+            streaming_count = sum(
+                1
+                for track in new_tracks
+                if len(track) >= 4 and track[3] == "streaming"
+            )
+
             self.lib_status_var.set(
                 f"{len(new_tracks)} canciones nuevas añadidas "
-                f"({len(self.library_tracks)} en total)"
+                f"({local_count} locales, "
+                f"{streaming_count} de streaming) "
+                f"— {len(self.library_tracks)} en total"
             )
 
             self.lib_progress_text_var.set("")
@@ -815,7 +2097,6 @@ class DJTaggerApp:
                 f"Sin novedades: sigues teniendo "
                 f"{len(self.library_tracks)} canciones."
             )
-
             self.lib_progress_text_var.set("")
 
     def _update_library_progress(
@@ -842,8 +2123,22 @@ class DJTaggerApp:
         )
 
         if tracks:
+            local_count = sum(
+                1
+                for track in tracks
+                if len(track) >= 4 and track[3] == "local"
+            )
+
+            streaming_count = sum(
+                1
+                for track in tracks
+                if len(track) >= 4 and track[3] == "streaming"
+            )
+
             self.lib_status_var.set(
-                f"{len(tracks)} canciones cargadas"
+                f"{len(tracks)} canciones cargadas "
+                f"({local_count} locales, "
+                f"{streaming_count} de streaming)"
             )
 
             self.lib_progressbar.configure(
@@ -887,43 +2182,62 @@ class DJTaggerApp:
                 reverse=True,
             )
 
-        for original_idx, (
-            title,
-            artist,
-            _seconds,
-        ) in rows:
+        for original_idx, track in rows:
+            title = track[0]
+            artist = track[1]
+            date_added = track[2]
+
+            # Compatibilidad con el formato antiguo
+            # y con el nuevo formato que incluye el tipo.
+            track_type = (
+                track[3]
+                if len(track) >= 4
+                else "local"
+            )
 
             if scope == "cancion":
                 haystack = title.lower()
+
             elif scope == "artista":
                 haystack = artist.lower()
+
             else:
                 haystack = f"{title} {artist}".lower()
 
-            if query in haystack:
-                iid = str(original_idx)
+            if query not in haystack:
+                continue
 
-                mark = (
-                    "☑"
-                    if iid in self.checked_tracks
-                    else "☐"
-                )
+            iid = str(original_idx)
 
-                self.library_tree.insert(
-                    "",
-                    "end",
-                    iid=iid,
-                    values=(
-                        mark,
-                        title,
-                        artist,
-                    ),
-                )
+            mark = (
+                "☑"
+                if iid in self.checked_tracks
+                else "☐"
+            )
 
-                self.filtered_tracks[iid] = (
+            tipo_texto = (
+                "STREAMING"
+                if track_type == "streaming"
+                else "LOCAL"
+            )
+
+            self.library_tree.insert(
+                "",
+                "end",
+                iid=iid,
+                values=(
+                    mark,
                     title,
                     artist,
-                )
+                    tipo_texto,
+                ),
+            )
+
+            self.filtered_tracks[iid] = (
+                title,
+                artist,
+                track_type,
+            )
 
     def _on_library_tree_click(self, event):
         region = self.library_tree.identify_region(
@@ -962,6 +2276,7 @@ class DJTaggerApp:
                 mark,
                 values[1],
                 values[2],
+                values[3],
             ),
         )
 
@@ -980,6 +2295,7 @@ class DJTaggerApp:
                     "☑",
                     values[1],
                     values[2],
+                    values[3],
                 ),
             )
 
@@ -1013,47 +2329,37 @@ class DJTaggerApp:
     def _search_selected_in_convertidor(self):
         if not self.checked_tracks:
             messagebox.showwarning(
-                "Nada seleccionado",
-                "Selecciona primero el check de una o varias canciones de la lista.",
+                "DJ Tagger",
+                "Selecciona al menos una canción.",
             )
             return
 
-        if len(self.checked_tracks) > 8:
-            if not messagebox.askyesno(
-                "Confirmar",
-                f"Vas a abrir {len(self.checked_tracks)} pestañas de búsqueda, una por canción. ¿Continuar?",
-            ):
-                return
-
         queries = []
 
-        # Recorremos en el orden en que aparecen actualmente en la lista
-        # respetando el orden/filtro elegido.
-        for iid in self.library_tree.get_children():
-            if (
-                iid in self.checked_tracks
-                and iid in self.filtered_tracks
-            ):
-                title, artist = self.filtered_tracks[iid]
+        for iid in self.checked_tracks:
+            track = self.filtered_tracks.get(iid)
 
-                query = self._apply_extended(
-                    f"{artist} - {title}"
-                )
+            if not track:
+                continue
 
+            title = track[0]
+            artist = track[1]
+
+            query = f"{title} {artist}".strip()
+
+            if query:
+                query = self._apply_extended(query)
                 queries.append(query)
-
-                self._log(
-                    f"Abriendo búsqueda en el navegador para: '{query}'"
-                )
 
         if not queries:
             messagebox.showwarning(
-                "Nada visible seleccionado",
-                "Las canciones seleccionadas no están en la vista actual (puede que el filtro las oculte).",
+                "DJ Tagger",
+                "No hay canciones válidas seleccionadas.",
             )
             return
 
         self._open_search_tabs(queries)
+
 
     def _run_convertidor_search(self):
         query = self.search_query_var.get().strip()
@@ -1087,6 +2393,38 @@ class DJTaggerApp:
                 "No se pudo abrir la búsqueda",
                 str(e),
             )
+
+    def _choose_and_process_mp3s(self):
+        files = filedialog.askopenfilenames(
+            title="Selecciona canciones MP3",
+            filetypes=[
+                ("Archivos MP3", "*.mp3"),
+                ("Todos los archivos", "*.*"),
+            ],
+        )
+
+        if not files:
+            return
+
+        mp3_files = [
+            str(filepath)
+            for filepath in files
+            if str(filepath).lower().endswith(".mp3")
+        ]
+
+        if not mp3_files:
+            messagebox.showwarning(
+                "DJ Tagger",
+                "No se han seleccionado archivos MP3.",
+            )
+            return
+
+        self._show_processing_area(mp3_files)
+
+        self._run_in_thread(
+            self._process_files_worker,
+            mp3_files,
+        )
 
     def _choose_manual_file(self):
         path = filedialog.askopenfilename(
