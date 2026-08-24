@@ -48,6 +48,7 @@ class DJTaggerApp:
         self.root.title("DJ Tagger")
         self.root.geometry("720x880")
         self.root.minsize(680, 700)
+        self._setup_modern_styles()
 
         self.log_queue = queue.Queue()
         self.watching = False
@@ -63,13 +64,361 @@ class DJTaggerApp:
         ]
 
         self._build_ui()
+        self._apply_modern_appearance()
         self._poll_log_queue()
+        self._appearance_check()
 
         # Comprobar actualizaciones en segundo plano para no bloquear la interfaz.
         threading.Thread(
             target=self._check_for_updates,
             daemon=True,
         ).start()
+
+    # ---------- Estilos modernos ----------
+
+    def _setup_modern_styles(self):
+        style = ttk.Style(self.root)
+
+        try:
+            if "aqua" in style.theme_names():
+                style.theme_use("aqua")
+        except Exception:
+            pass
+
+        style.configure(
+            "Modern.TFrame",
+            borderwidth=0,
+        )
+
+        style.configure(
+            "Modern.TLabel",
+            font=("Helvetica", 11),
+        )
+
+        style.configure(
+            "Title.TLabel",
+            font=("Helvetica", 18, "bold"),
+        )
+
+        style.configure(
+            "Subtitle.TLabel",
+            font=("Helvetica", 10),
+        )
+
+        style.configure(
+            "Modern.TButton",
+            font=("Helvetica", 10, "bold"),
+            padding=(16, 9),
+        )
+
+        style.configure(
+            "Primary.TButton",
+            font=("Helvetica", 10, "bold"),
+            padding=(16, 9),
+        )
+
+        style.configure(
+            "Treeview",
+            rowheight=36,
+            font=("Helvetica", 10),
+            borderwidth=0,
+        )
+
+        style.configure(
+            "Treeview.Heading",
+            font=("Helvetica", 10, "bold"),
+            padding=(10, 9),
+        )
+
+        style.configure(
+            "Modern.TNotebook",
+            borderwidth=0,
+        )
+
+        style.configure(
+            "Modern.TNotebook.Tab",
+            padding=(20, 10),
+            font=("Helvetica", 10, "bold"),
+        )
+
+    def _is_dark_mode(self):
+        """Detecta el modo claro/oscuro actual de macOS."""
+        try:
+            from AppKit import (
+                NSAppearance,
+                NSApp,
+            )
+
+            app = NSApp()
+            if app is None:
+                return False
+
+            appearance = app.effectiveAppearance()
+
+            if appearance is None:
+                return False
+
+            best = appearance.bestMatchFromAppearancesWithNames_(
+                [
+                    "NSAppearanceNameAqua",
+                    "NSAppearanceNameDarkAqua",
+                ]
+            )
+
+            return str(best) == "NSAppearanceNameDarkAqua"
+
+        except Exception:
+            return False
+
+    def _apply_modern_appearance(self):
+        dark = self._is_dark_mode()
+
+        if dark:
+            bg = "#1C1C1E"
+            surface = "#2C2C2E"
+            surface_alt = "#242426"
+            text = "#F5F5F7"
+            secondary = "#A1A1A6"
+            border = "#3A3A3C"
+            table_bg = "#242426"
+            table_selected = "#315F9F"
+            header_bg = "#323234"
+            drop_bg = "#242426"
+            accent = "#0A84FF"
+        else:
+            bg = "#F5F5F7"
+            surface = "#FFFFFF"
+            surface_alt = "#FAFAFC"
+            text = "#1D1D1F"
+            secondary = "#6E6E73"
+            border = "#D2D2D7"
+            table_bg = "#FFFFFF"
+            table_selected = "#DCEBFF"
+            header_bg = "#F2F2F7"
+            drop_bg = "#FFFFFF"
+            accent = "#007AFF"
+
+        # -----------------------------------------------------
+        # Root
+        # -----------------------------------------------------
+
+        try:
+            self.root.configure(bg=bg)
+        except Exception:
+            pass
+
+        # -----------------------------------------------------
+        # Estilos ttk
+        # -----------------------------------------------------
+
+        style = ttk.Style(self.root)
+
+        style.configure(
+            "Modern.TFrame",
+            background=bg,
+        )
+
+        style.configure(
+            "Card.TFrame",
+            background=surface,
+        )
+
+        style.configure(
+            "Modern.TLabel",
+            background=bg,
+            foreground=text,
+        )
+
+        style.configure(
+            "Title.TLabel",
+            background=bg,
+            foreground=text,
+        )
+
+        style.configure(
+            "Subtitle.TLabel",
+            background=bg,
+            foreground=secondary,
+        )
+
+        style.configure(
+            "Modern.TButton",
+            foreground=text,
+            padding=(16, 9),
+        )
+
+        style.configure(
+            "Primary.TButton",
+            foreground=text,
+            padding=(16, 9),
+        )
+
+        style.configure(
+            "Treeview",
+            background=table_bg,
+            fieldbackground=table_bg,
+            foreground=text,
+            rowheight=36,
+        )
+
+        style.configure(
+            "Treeview.Heading",
+            background=header_bg,
+            foreground=text,
+        )
+
+        style.map(
+            "Treeview",
+            background=[
+                ("selected", table_selected),
+            ],
+            foreground=[
+                ("selected", text),
+            ],
+        )
+
+        style.configure(
+            "Modern.TNotebook",
+            background=bg,
+            borderwidth=0,
+        )
+
+        style.configure(
+            "Modern.TNotebook.Tab",
+            background=bg,
+            foreground=secondary,
+            padding=(20, 10),
+        )
+
+        style.map(
+            "Modern.TNotebook.Tab",
+            background=[
+                ("selected", surface),
+            ],
+            foreground=[
+                ("selected", text),
+            ],
+        )
+
+        # -----------------------------------------------------
+        # Recorrer widgets y adaptar los widgets Tk clásicos
+        # -----------------------------------------------------
+
+        def update_widget(widget):
+            try:
+                cls = widget.winfo_class()
+            except Exception:
+                return
+
+            try:
+                if cls in ("Frame", "Labelframe"):
+                    widget.configure(
+                        background=surface
+                        if widget is getattr(self, "drop_frame", None)
+                        else bg
+                    )
+
+                elif cls == "Label":
+                    widget.configure(
+                        background=surface
+                        if widget is getattr(self, "drop_frame", None)
+                        else bg,
+                        foreground=text,
+                    )
+
+                elif cls == "Canvas":
+                    widget.configure(
+                        background=surface,
+                        highlightbackground=border,
+                    )
+
+                elif cls == "Text":
+                    widget.configure(
+                        background=surface_alt,
+                        foreground=text,
+                        insertbackground=text,
+                    )
+
+                elif cls == "Entry":
+                    widget.configure(
+                        background=surface,
+                        foreground=text,
+                        insertbackground=text,
+                    )
+
+                elif cls == "Button":
+                    widget.configure(
+                        background=surface,
+                        foreground=text,
+                        activebackground=header_bg,
+                        activeforeground=text,
+                        highlightbackground=border,
+                    )
+
+            except Exception:
+                pass
+
+            for child in widget.winfo_children():
+                update_widget(child)
+
+        update_widget(self.root)
+
+        # -----------------------------------------------------
+        # Elementos específicos de la zona Drag & Drop
+        # -----------------------------------------------------
+
+        try:
+            self.drop_frame.configure(
+                background=drop_bg,
+                highlightbackground=border,
+                highlightcolor=accent,
+            )
+        except Exception:
+            pass
+
+        try:
+            self.drop_label.configure(
+                background=drop_bg,
+                foreground=secondary,
+            )
+        except Exception:
+            pass
+
+        try:
+            self.processing_header.configure(
+                background=header_bg,
+            )
+
+            for child in self.processing_header.winfo_children():
+                try:
+                    child.configure(
+                        background=header_bg,
+                        foreground=text,
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # -----------------------------------------------------
+        # Guardar el estado para detectar cambios posteriores
+        # -----------------------------------------------------
+
+        self._last_dark_mode = dark
+
+    def _appearance_check(self):
+        """Actualiza el tema si el usuario cambia el modo de macOS."""
+        try:
+            current = self._is_dark_mode()
+
+            if current != getattr(self, "_last_dark_mode", None):
+                self._apply_modern_appearance()
+
+        except Exception:
+            pass
+
+        self.root.after(1500, self._appearance_check)
+
 
     # ---------- Construcción de la interfaz ----------
 
@@ -575,6 +924,7 @@ class DJTaggerApp:
             notebook,
             padding=10,
         )
+        self.tab_rename = tab_rename
         notebook.add(
             tab_rename,
             text="Renombrar y añadir canciones",
@@ -895,11 +1245,48 @@ class DJTaggerApp:
 
         self.processing_frame.pack_forget()
 
-        ttk.Button(
+        # Botones de confirmación: fuera de la zona de la tabla,
+        # justo entre la tabla y "O elegir MP3...".
+        self.processing_buttons_frame = ttk.Frame(tab_rename)
+
+        buttons_inner = ttk.Frame(self.processing_buttons_frame)
+        buttons_inner.pack(anchor="center")
+
+        self.processing_confirm_button = ttk.Button(
+            buttons_inner,
+            style="Primary.TButton",
+            text="Confirmar y añadir",
+            command=lambda: self._confirm_processing_preview(
+                None,
+                self._processing_results,
+            ),
+        )
+        self.processing_confirm_button.pack(
+            side="left",
+            padx=(0, 6),
+        )
+
+        self.processing_cancel_button = ttk.Button(
+            buttons_inner,
+            style="Modern.TButton",
+            text="Cancelar",
+            command=self._cancel_processing_preview,
+        )
+        self.processing_cancel_button.pack(
+            side="left",
+            padx=(6, 0),
+        )
+
+        # Ocultos hasta que haya una tabla de resultados.
+        self.processing_buttons_frame.pack_forget()
+
+        self.choose_mp3_button = ttk.Button(
             tab_rename,
+            style="Primary.TButton",
             text="O elegir MP3...",
             command=self._choose_and_process_mp3s,
-        ).pack(pady=(8, 4))
+        )
+        self.choose_mp3_button.pack(pady=(8, 4))
 
         ttk.Label(
             tab_rename,
@@ -1664,84 +2051,48 @@ class DJTaggerApp:
             except Exception:
                 pass
 
-        # ====================================================
-        # PANEL INDEPENDIENTE
-        #
-        # Está directamente sobre ROOT, fuera de la tabla
-        # y fuera de processing_frame.
-        # ====================================================
-
-        buttons = tk.Frame(
-            self.root,
-            bd=0,
-            relief="flat",
-        )
-
+        # Panel situado directamente en la pestaña,
+        # fuera de la tabla y de su zona de scroll.
+        buttons = ttk.Frame(self.tab_rename)
         self.processing_buttons_frame = buttons
 
-        # Siempre abajo de la ventana.
-        buttons.place(
-            relx=0.5,
-            rely=1.0,
-            anchor="s",
-            relwidth=0.70,
-            height=68,
-            y=-8,
+        buttons.pack(
+            fill="x",
+            padx=10,
+            pady=(4, 4),
+            before=self.choose_mp3_button,
         )
 
-        # ====================================================
-        # CONFIRMAR
-        # ====================================================
+        buttons_inner = ttk.Frame(buttons)
+        buttons_inner.pack(anchor="center")
 
-        confirm_button = tk.Button(
-            buttons,
+        # Confirmar
+        confirm_button = ttk.Button(
+            buttons_inner,
             text="Confirmar y añadir",
             command=lambda: self._confirm_processing_preview(
                 None,
                 self._processing_results,
             ),
-            font=("Helvetica", 10),
-            padx=14,
-            pady=4,
-            bd=1,
-            relief="raised",
         )
-
         confirm_button.pack(
             side="left",
-            padx=(0, 5),
-            pady=8,
+            padx=(0, 6),
         )
 
-        # ====================================================
-        # CANCELAR
-        # ====================================================
-
-        cancel_button = tk.Button(
-            buttons,
+        # Cancelar
+        cancel_button = ttk.Button(
+            buttons_inner,
             text="Cancelar",
             command=self._cancel_processing_preview,
-            font=("Helvetica", 10),
-            padx=14,
-            pady=4,
-            bd=1,
-            relief="raised",
         )
-
         cancel_button.pack(
             side="left",
-            padx=(5, 0),
-            pady=8,
+            padx=(6, 0),
         )
 
         self.processing_confirm_button = confirm_button
         self.processing_cancel_button = cancel_button
-
-        # Asegurarnos de que queden por encima de la tabla.
-        try:
-            buttons.lift()
-        except Exception:
-            pass
 
     def _process_confirmed_files_worker(
         self,
