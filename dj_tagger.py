@@ -437,24 +437,14 @@ def _parse_music_date_string(date_str: str) -> int:
 
 
 def _fetch_apple_music_batch(start_index: int, end_index: int):
-    """Lee un rango de canciones de la biblioteca de Apple Music.
+    """Lee un rango de canciones de Apple Music incluyendo su database ID."""
 
-    Devuelve:
-        (total_canciones, lista_de_tuplas)
-
-    Cada tupla contiene:
-        (titulo, artista, fecha_orden, tipo)
-
-    tipo:
-        "local"     -> archivo local/importado
-        "streaming" -> canción de Apple Music/iCloud
-    """
-
-    script = f'''
+    script = f"""
     set nameList to {{}}
     set artistList to {{}}
     set dateList to {{}}
     set typeList to {{}}
+    set idList to {{}}
     set totalCount to 0
 
     tell application "Music"
@@ -474,6 +464,7 @@ def _fetch_apple_music_batch(start_index: int, end_index: int):
                 set trackArtist to ""
                 set trackDateStr to ""
                 set trackType to "streaming"
+                set trackDatabaseID to ""
 
                 try
                     set trackName to (name of t)
@@ -497,10 +488,15 @@ def _fetch_apple_music_batch(start_index: int, end_index: int):
                     end if
                 end try
 
+                try
+                    set trackDatabaseID to (database ID of t as string)
+                end try
+
                 set end of nameList to trackName
                 set end of artistList to trackArtist
                 set end of dateList to trackDateStr
                 set end of typeList to trackType
+                set end of idList to trackDatabaseID
             end repeat
         end if
     end tell
@@ -511,11 +507,12 @@ def _fetch_apple_music_batch(start_index: int, end_index: int):
     set artistText to artistList as string
     set dateText to dateList as string
     set typeText to typeList as string
+    set idText to idList as string
 
     set AppleScript's text item delimiters to ""
 
-    return (totalCount as string) & "###SEP###" & nameText & "###SEP###" & artistText & "###SEP###" & dateText & "###SEP###" & typeText
-    '''
+    return (totalCount as string) & "###SEP###" & nameText & "###SEP###" & artistText & "###SEP###" & dateText & "###SEP###" & typeText & "###SEP###" & idText
+    """
 
     result = subprocess.run(
         ["osascript", "-e", script],
@@ -528,7 +525,7 @@ def _fetch_apple_music_batch(start_index: int, end_index: int):
     output = result.stdout.strip()
     parts = output.split("###SEP###")
 
-    if len(parts) < 5:
+    if len(parts) < 6:
         return 0, []
 
     (
@@ -537,7 +534,8 @@ def _fetch_apple_music_batch(start_index: int, end_index: int):
         artist_part,
         date_part,
         type_part,
-    ) = parts[0], parts[1], parts[2], parts[3], parts[4]
+        id_part,
+    ) = parts[:6]
 
     try:
         total = int(total_raw.strip())
@@ -548,12 +546,14 @@ def _fetch_apple_music_batch(start_index: int, end_index: int):
     artists = artist_part.split("|||") if artist_part else []
     date_strs = date_part.split("|||") if date_part else []
     types = type_part.split("|||") if type_part else []
+    database_ids = id_part.split("|||") if id_part else []
 
     n = min(
         len(names),
         len(artists),
         len(date_strs),
         len(types),
+        len(database_ids),
     )
 
     tracks = [
@@ -562,6 +562,7 @@ def _fetch_apple_music_batch(start_index: int, end_index: int):
             artists[i],
             _parse_music_date_string(date_strs[i]),
             types[i],
+            database_ids[i],
         )
         for i in range(n)
     ]
@@ -569,25 +570,149 @@ def _fetch_apple_music_batch(start_index: int, end_index: int):
     return total, tracks
 
 
-def get_apple_music_song_count():
-    """Devuelve solo el número total de canciones (media kind 'song') en
-    tu biblioteca, sin leer sus datos. Rápido: para comprobar si hay
-    canciones nuevas sin tener que recargar toda la biblioteca."""
+
+def get_apple_music_database_ids():
+    """Devuelve un diccionario {database_id: True} de las canciones actuales."""
     if sys.platform != "darwin":
-        return -1
-    script = '''
-    tell application "Music"
-        return (count of (every track of library playlist 1 whose media kind is song)) as string
-    end tell
-    '''
+        return None
+
+    script = """
+tell application "Music"
+    set matchingTracks to (every track of library playlist 1 whose media kind is song)
+    set idList to {}
+
+    repeat with t in matchingTracks
+        try
+            set end of idList to (database ID of t as string)
+        end try
+    end repeat
+
+    set AppleScript's text item delimiters to "|||"
+    set outputText to idList as string
+    set AppleScript's text item delimiters to ""
+
+    return outputText
+end tell
+"""
+
     try:
         result = subprocess.run(
             ["osascript", "-e", script],
-            capture_output=True, text=True, timeout=60, check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,
         )
-        return int(result.stdout.strip())
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
-        return -1
+
+        output = result.stdout.strip()
+
+        if not output:
+            return {}
+
+        return {
+            item.strip(): True
+            for item in output.split("|||")
+            if item.strip()
+        }
+
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+
+
+
+def get_apple_music_track_by_database_id(database_id):
+    """Obtiene los datos de una única canción mediante su database ID."""
+    if sys.platform != "darwin":
+        return None
+
+    try:
+        database_id = int(database_id)
+    except (TypeError, ValueError):
+        return None
+
+    script = f"""
+tell application "Music"
+    set matchingTracks to (every track of library playlist 1 whose media kind is song)
+    set targetTrack to missing value
+
+    repeat with t in matchingTracks
+        try
+            if (database ID of t) is {database_id} then
+                set targetTrack to t
+                exit repeat
+            end if
+        end try
+    end repeat
+
+    if targetTrack is missing value then
+        return ""
+    end if
+
+    set trackName to ""
+    set trackArtist to ""
+    set trackDateStr to ""
+    set trackType to "streaming"
+
+    try
+        set trackName to (name of targetTrack)
+    end try
+
+    try
+        set trackArtist to (artist of targetTrack)
+    end try
+
+    try
+        set trackDateStr to ((date added of targetTrack) as string)
+    end try
+
+    try
+        set trackClass to (class of targetTrack) as string
+
+        if trackClass contains "file track" then
+            set trackType to "local"
+        else
+            set trackType to "streaming"
+        end if
+    end try
+
+    return (trackName as string) & "###SEP###" & ¬
+        (trackArtist as string) & "###SEP###" & ¬
+        (trackDateStr as string) & "###SEP###" & ¬
+        (trackType as string)
+end tell
+"""
+
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,
+        )
+
+        output = result.stdout.strip()
+
+        if not output:
+            return None
+
+        parts = output.split("###SEP###")
+
+        if len(parts) != 4:
+            return None
+
+        title, artist, date_str, track_type = parts
+
+        return (
+            title,
+            artist,
+            _parse_music_date_string(date_str),
+            track_type,
+            str(database_id),
+        )
+
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
 
 
 def get_apple_music_library(progress_callback=None, batch_size: int = 50, start_index: int = 1):

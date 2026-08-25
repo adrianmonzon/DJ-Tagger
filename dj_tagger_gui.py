@@ -2315,9 +2315,7 @@ class DJTaggerApp:
         )
 
     def _load_library_worker(self):
-        print(
-            "Leyendo tu biblioteca de Apple Music..."
-        )
+        print("Leyendo tu biblioteca de Apple Music...")
 
         def on_progress(done, total):
             self.root.after(
@@ -2332,6 +2330,8 @@ class DJTaggerApp:
             progress_callback=on_progress,
         )
 
+        print(f"Biblioteca cargada: {len(tracks)} canciones.")
+
         self.root.after(
             0,
             lambda: self._on_library_loaded(tracks),
@@ -2343,7 +2343,7 @@ class DJTaggerApp:
         )
 
         self.lib_status_var.set(
-            "Buscando canciones nuevas..."
+            "Comprobando cambios en la biblioteca..."
         )
 
         self._run_in_thread(
@@ -2351,59 +2351,147 @@ class DJTaggerApp:
         )
 
     def _update_library_worker(self):
-        current_count = len(self.library_tracks)
-        new_total = core.get_apple_music_song_count()
+        print("Comprobando cambios en la biblioteca de Apple Music...")
 
-        if new_total < 0:
+        try:
+            current_ids = core.get_apple_music_database_ids()
+
+            if current_ids is None:
+                self.root.after(
+                    0,
+                    lambda: self._on_library_update_done(
+                        None,
+                        "No se pudo comprobar tu biblioteca (revisa la ventana de Actividad).",
+                    ),
+                )
+                return
+
+            current_id_set = set(current_ids.keys())
+
+            old_ids = {
+                str(track[4])
+                for track in self.library_tracks
+                if len(track) >= 5 and track[4]
+            }
+
+            print(
+                f"IDs locales: {len(old_ids)}, "
+                f"IDs Apple Music: {len(current_id_set)}"
+            )
+
+            # Si por alguna razón la biblioteca actual no tiene IDs,
+            # hacemos una carga completa para inicializarla correctamente.
+            if not old_ids:
+                print(
+                    "La biblioteca local no tiene database IDs. "
+                    "Realizando sincronización inicial..."
+                )
+
+                tracks = core.get_apple_music_library()
+
+                self.root.after(
+                    0,
+                    lambda: self._on_library_update_done(
+                        tracks,
+                        None,
+                        len(tracks),
+                        0,
+                    ),
+                )
+                return
+
+            added_ids = current_id_set - old_ids
+            removed_ids = old_ids - current_id_set
+
+            print(
+                f"Canciones nuevas: {len(added_ids)} | "
+                f"Eliminadas: {len(removed_ids)}"
+            )
+
+            # No hay absolutamente ningún cambio.
+            if not added_ids and not removed_ids:
+                self.root.after(
+                    0,
+                    lambda: self._on_library_update_done(
+                        [],
+                        None,
+                        0,
+                        0,
+                    ),
+                )
+                return
+
+            # Obtener únicamente las canciones nuevas.
+            added_tracks = []
+
+            for index, database_id in enumerate(sorted(added_ids), 1):
+                print(
+                    f"Obteniendo canción nueva "
+                    f"{index}/{len(added_ids)} "
+                    f"(ID {database_id})..."
+                )
+
+                track = core.get_apple_music_track_by_database_id(
+                    database_id
+                )
+
+                if track is not None:
+                    added_tracks.append(track)
+
+                self.root.after(
+                    0,
+                    lambda done=index, total=len(added_ids): (
+                        self._update_library_progress(done, total)
+                    ),
+                )
+
+            # Mantener las canciones existentes y quitar únicamente
+            # las que ya no están en Apple Music.
+            removed_ids = {str(x) for x in removed_ids}
+
+            updated_tracks = [
+                track
+                for track in self.library_tracks
+                if len(track) >= 5
+                and str(track[4]) not in removed_ids
+            ]
+
+            # Añadimos solamente las nuevas.
+            updated_tracks.extend(added_tracks)
+
             self.root.after(
                 0,
-                lambda: self._on_library_update_done(
+                lambda tracks=updated_tracks,
+                       added=len(added_tracks),
+                       removed=len(removed_ids): (
+                    self._on_library_update_done(
+                        tracks,
+                        None,
+                        added,
+                        removed,
+                    )
+                ),
+            )
+
+        except Exception as exc:
+            print(f"Error actualizando biblioteca: {exc}")
+
+            self.root.after(
+                0,
+                lambda error=str(exc): self._on_library_update_done(
                     None,
-                    "No se pudo comprobar tu biblioteca (revisa Actividad).",
+                    f"No se pudo actualizar la biblioteca: {error}",
+                    0,
+                    0,
                 ),
             )
-            return
-
-        if new_total <= current_count:
-            self.root.after(
-                0,
-                lambda: self._on_library_update_done(
-                    [],
-                    f"Sin novedades: sigues teniendo {current_count} canciones.",
-                ),
-            )
-            return
-
-        print(
-            f"Buscando canciones nuevas ({new_total - current_count})..."
-        )
-
-        def on_progress(done, total):
-            self.root.after(
-                0,
-                lambda: self._update_library_progress(
-                    done,
-                    total,
-                ),
-            )
-
-        new_tracks = core.get_apple_music_library(
-            progress_callback=on_progress,
-            start_index=current_count + 1,
-        )
-
-        self.root.after(
-            0,
-            lambda: self._on_library_update_done(
-                new_tracks,
-                None,
-            ),
-        )
 
     def _on_library_update_done(
         self,
         new_tracks,
         error_message,
+        added_count=0,
+        removed_count=0,
     ):
         self.load_lib_btn.configure(
             state="normal",
@@ -2416,39 +2504,49 @@ class DJTaggerApp:
             self.lib_progress_text_var.set("")
             return
 
-        if new_tracks:
-            self.library_tracks.extend(
-                new_tracks
-            )
+        # En una actualización incremental recibimos la biblioteca
+        # completa ya actualizada. La reemplazamos en lugar de hacer
+        # extend(), evitando duplicados.
+        if new_tracks is not None:
+            self.library_tracks = list(new_tracks)
 
-            local_count = sum(
-                1
-                for track in new_tracks
-                if len(track) < 4 or track[3] == "local"
-            )
+        local_count = sum(
+            1
+            for track in self.library_tracks
+            if len(track) < 4 or track[3] == "local"
+        )
 
-            streaming_count = sum(
-                1
-                for track in new_tracks
-                if len(track) >= 4 and track[3] == "streaming"
-            )
+        total_count = len(self.library_tracks)
+
+        if added_count or removed_count:
+            changes = []
+
+            if added_count:
+                changes.append(
+                    f"{added_count} añadida"
+                    + ("s" if added_count != 1 else "")
+                )
+
+            if removed_count:
+                changes.append(
+                    f"{removed_count} eliminada"
+                    + ("s" if removed_count != 1 else "")
+                )
 
             self.lib_status_var.set(
-                f"{len(new_tracks)} canciones nuevas añadidas "
-                f"({local_count} locales, "
-                f"{streaming_count} de streaming) "
-                f"— {len(self.library_tracks)} en total"
+                f"Biblioteca actualizada: {', '.join(changes)}. "
+                f"{total_count} canciones."
             )
-
-            self.lib_progress_text_var.set("")
-            self._apply_library_filter()
-
         else:
             self.lib_status_var.set(
-                f"Sin novedades: sigues teniendo "
-                f"{len(self.library_tracks)} canciones."
+                f"Sin cambios: {total_count} canciones."
             )
-            self.lib_progress_text_var.set("")
+
+        self.lib_progress_text_var.set("")
+
+        # Volvemos a mostrar la biblioteca actualizada.
+        self._apply_library_filter()
+
 
     def _update_library_progress(
         self,
