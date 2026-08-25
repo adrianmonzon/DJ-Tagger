@@ -64,7 +64,7 @@ def check_for_update():
             for asset in data.get("assets", []):
                 name = asset.get("name", "")
 
-                if name.lower() == "dj tagger-macos.zip":
+                if name.lower() == "dj.tagger-macos.zip":
                     download_url = asset.get(
                         "browser_download_url"
                     )
