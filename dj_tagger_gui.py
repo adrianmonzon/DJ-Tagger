@@ -625,19 +625,63 @@ class DJTaggerApp:
 
     def _check_for_updates(self):
         try:
-            updater = getattr(core, "check_for_updates", None)
+            from updater import check_for_update
 
-            if updater is None:
-                return
+            def worker():
+                try:
+                    result = check_for_update()
 
-            self._run_in_thread(
-                updater
-            )
+                    self.root.after(
+                        0,
+                        lambda r=result: self._on_update_check_done(r),
+                    )
+
+                except Exception as exc:
+                    self.root.after(
+                        0,
+                        lambda e=exc: self._log(
+                            f"Error comprobando actualizaciones: {e}\n"
+                        ),
+                    )
+
+            self._run_in_thread(worker)
 
         except Exception as exc:
             self._log(
                 f"Error comprobando actualizaciones: {exc}\n"
             )
+
+    def _on_update_check_done(self, result):
+        if not result:
+            return
+
+        if result.get("error"):
+            self._log(
+                f"Error comprobando actualizaciones: "
+                f"{result['error']}\n"
+            )
+            return
+
+        if not result.get("available"):
+            return
+
+        latest_version = result.get(
+            "latest_version",
+            "?",
+        )
+
+        current_version = result.get(
+            "current_version",
+            APP_VERSION,
+        )
+
+        messagebox.showinfo(
+            "Actualización disponible",
+            f"Hay una nueva versión de DJ Tagger.\n\n"
+            f"Versión actual: {current_version}\n"
+            f"Nueva versión: {latest_version}\n\n"
+            f"Puedes descargarla desde GitHub.",
+        )
 
     def _build_ui(self):
         pad = {"padx": 10, "pady": 6}
