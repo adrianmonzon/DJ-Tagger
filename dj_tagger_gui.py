@@ -115,6 +115,11 @@ class DJTaggerApp:
         )
 
         style.configure(
+            "VersionBadge.TLabel",
+            font=("Helvetica", 10),
+        )
+
+        style.configure(
             "Modern.TButton",
             font=("Helvetica", 10, "bold"),
             padding=(16, 9),
@@ -251,6 +256,12 @@ class DJTaggerApp:
         )
 
         style.configure(
+            "VersionBadge.TLabel",
+            background=bg,
+            foreground=accent,
+        )
+
+        style.configure(
             "Modern.TButton",
             foreground=text,
             padding=(16, 9),
@@ -285,6 +296,26 @@ class DJTaggerApp:
                 ("selected", text),
             ],
         )
+
+        # Franjas alternas (zebra) para que las tablas se lean mejor.
+        try:
+            self.library_tree.tag_configure("odd_row", background=table_bg)
+            self.library_tree.tag_configure("even_row", background=surface_alt)
+        except Exception:
+            pass
+
+        try:
+            self.processing_tree.tag_configure("odd_row", background=table_bg)
+            self.processing_tree.tag_configure("even_row", background=surface_alt)
+        except Exception:
+            pass
+
+        # Puntito de acento junto al título.
+        try:
+            self.header_badge.configure(background=bg)
+            self.header_badge.itemconfig("dot", fill=accent)
+        except Exception:
+            pass
 
         style.configure(
             "Modern.TNotebook",
@@ -761,18 +792,50 @@ class DJTaggerApp:
     def _build_ui(self):
         pad = {"padx": 10, "pady": 6}
 
-        title = ttk.Label(self.root, text="DJ Tagger", font=("Helvetica", 18, "bold"))
-        title.pack(anchor="w", **pad)
+        header = ttk.Frame(self.root, style="Modern.TFrame")
+        header.pack(fill="x", padx=10, pady=(10, 4))
 
-        subtitle = ttk.Label(
-            self.root,
-            text="Etiqueta MP3 automáticamente y los añade a Apple Music",
-            foreground="#666",
+        self.header_badge = tk.Canvas(
+            header,
+            width=10,
+            height=10,
+            highlightthickness=0,
+            bd=0,
         )
-        subtitle.pack(anchor="w", padx=10, pady=(0, 6))
+        self.header_badge.pack(side="left", padx=(0, 8), pady=(4, 0))
+        self.header_badge.create_oval(
+            0, 0, 10, 10,
+            fill="#0A84FF",
+            outline="",
+            tags=("dot",),
+        )
 
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill="x", padx=10, pady=(0, 10))
+        title_block = ttk.Frame(header, style="Modern.TFrame")
+        title_block.pack(side="left", fill="x")
+
+        title_row = ttk.Frame(title_block, style="Modern.TFrame")
+        title_row.pack(anchor="w")
+
+        ttk.Label(
+            title_row,
+            text="DJ Tagger",
+            style="Title.TLabel",
+        ).pack(side="left")
+
+        ttk.Label(
+            title_row,
+            text=f"  v{APP_VERSION}",
+            style="VersionBadge.TLabel",
+        ).pack(side="left", pady=(4, 0))
+
+        ttk.Label(
+            title_block,
+            text="Etiqueta MP3 automáticamente y los añade a Apple Music",
+            style="Subtitle.TLabel",
+        ).pack(anchor="w", pady=(1, 0))
+
+        notebook = ttk.Notebook(self.root, style="Modern.TNotebook")
+        notebook.pack(fill="x", padx=10, pady=(4, 10))
 
         # --- Pestaña: Mi biblioteca ---
         tab_library = ttk.Frame(notebook, padding=10)
@@ -1593,6 +1656,9 @@ class DJTaggerApp:
                     "",
                     "",
                     "Procesando...",
+                ),
+                tags=(
+                    "even_row" if index % 2 == 0 else "odd_row",
                 ),
             )
 
@@ -2821,6 +2887,11 @@ class DJTaggerApp:
                     title,
                     artist,
                     tipo_texto,
+                ),
+                tags=(
+                    "even_row"
+                    if len(self.filtered_tracks) % 2 == 0
+                    else "odd_row",
                 ),
             )
 
