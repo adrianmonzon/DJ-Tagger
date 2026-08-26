@@ -60,12 +60,18 @@ jobs:
 
       - name: Crear aplicación
         run: |
+          ICON_FLAG=()
+          if [ -f "icon.icns" ]; then
+            ICON_FLAG=(--icon "icon.icns")
+          fi
+
           pyinstaller \
             --name "DJ Tagger" \
             --windowed \
             --noconfirm \
             --clean \
             --osx-bundle-identifier "com.adrianmonzon.djtagger" \
+            "${ICON_FLAG[@]}" \
             dj_tagger_gui.py
 
           PLIST="dist/DJ Tagger.app/Contents/Info.plist"
