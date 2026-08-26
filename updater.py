@@ -29,10 +29,13 @@ UPDATE_FLAG_PATH = os.path.join(
 )
 
 # El nombre del asset del ZIP en el Release de GitHub puede variar un poco
-# entre publicaciones (espacios, guiones, mayúsculas...). Para no depender
-# de un match exacto, exigimos solo que contenga "dj" y "tagger" y termine
-# en .zip.
-_ASSET_NAME_RE = re.compile(r"dj[\s_-]*tagger.*\.zip$", re.IGNORECASE)
+# entre publicaciones (espacios, guiones, mayúsculas...). Además, GitHub
+# sustituye automáticamente los espacios por puntos en el nombre real del
+# asset al subirlo (p.ej. "DJ Tagger-macOS.zip" -> "DJ.Tagger-macOS.zip"),
+# así que el punto también cuenta como separador válido aquí. Para no
+# depender de un match exacto, exigimos solo que contenga "dj" y "tagger"
+# y termine en .zip.
+_ASSET_NAME_RE = re.compile(r"dj[\s_.-]*tagger.*\.zip$", re.IGNORECASE)
 
 
 def read_and_clear_update_flag():
