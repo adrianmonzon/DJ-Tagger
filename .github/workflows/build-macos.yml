@@ -101,27 +101,6 @@ jobs:
           zip -r "../DJ Tagger-macOS.zip" "DJ Tagger.app"
           cd ..
 
-      - name: Crear DMG
-        run: |
-          rm -rf dmg
-          mkdir -p dmg
-          cp -R "dist/DJ Tagger.app" "dmg/"
-
-          hdiutil create \
-            -volname "DJ Tagger" \
-            -srcfolder "dmg" \
-            -ov \
-            -format UDZO \
-            "DJ Tagger.dmg"
-
-      - name: Guardar archivos
-        uses: actions/upload-artifact@v4
-        with:
-          name: DJ-Tagger-macOS
-          path: |
-            DJ Tagger.dmg
-            DJ Tagger-macOS.zip
-
       - name: Crear release
         uses: softprops/action-gh-release@v2
         with:
@@ -129,7 +108,68 @@ jobs:
           name: DJ Tagger v${{ steps.version.outputs.VERSION }}
           generate_release_notes: true
           files: |
+            DJ Tagger-macOS.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Crear DMG
+        id: dmg
+        continue-on-error: true
+        run: |
+          rm -rf dmg
+          mkdir -p dmg
+          cp -R "dist/DJ Tagger.app" "dmg/"
+          rm -f "DJ Tagger.dmg"
+
+          # hdiutil a veces falla con "Resource busy" en los runners de
+          # GitHub por un recurso de disco que queda ocupado un instante.
+          # Reintentamos varias veces antes de dar el paso por fallido.
+          success=0
+
+          for attempt in 1 2 3 4 5; do
+            echo "Creando DMG (intento $attempt de 5)..."
+
+            if hdiutil create \
+              -volname "DJ Tagger" \
+              -srcfolder "dmg" \
+              -ov \
+              -format UDZO \
+              "DJ Tagger.dmg"; then
+              success=1
+              break
+            fi
+
+            echo "hdiutil falló, liberando recursos y reintentando..."
+
+            hdiutil info | \
+              awk '/image-path/{path=$0} /\/dev\/disk/{if (path ~ /DJ Tagger.dmg/) print $1}' | \
+              xargs -I {} hdiutil detach {} -force >/dev/null 2>&1 || true
+
+            sleep 5
+          done
+
+          if [ "$success" -ne 1 ]; then
+            echo "ERROR: no se pudo crear el DMG tras varios intentos. Se omite (el ZIP ya está publicado)."
+            exit 1
+          fi
+
+          echo "DMG creado correctamente."
+
+      - name: Guardar archivos
+        if: steps.dmg.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DJ-Tagger-macOS
+          path: |
             DJ Tagger.dmg
             DJ Tagger-macOS.zip
+
+      - name: Adjuntar DMG al release
+        if: steps.dmg.outcome == 'success'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          files: |
+            DJ Tagger.dmg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
