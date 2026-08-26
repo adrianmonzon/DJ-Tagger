@@ -38,7 +38,6 @@ def _get_latest_release():
             "User-Agent": "DJ-Tagger",
         },
     )
-
     context = _create_ssl_context()
 
     with urllib.request.urlopen(
@@ -54,11 +53,9 @@ def _get_latest_release():
 def check_for_update():
     try:
         data = _get_latest_release()
-
         latest_version = data["tag_name"].lstrip("v")
 
         if version_tuple(latest_version) > version_tuple(APP_VERSION):
-
             download_url = None
 
             for asset in data.get("assets", []):
@@ -164,8 +161,8 @@ def install_update(zip_path):
         )
 
     # Determinar la aplicación que está ejecutándose.
-    # Cuando DJ Tagger está empaquetado como .app, __file__ está dentro de:
-    # DJ Tagger.app/Contents/MacOS/
+    # En una app empaquetada, __file__ está dentro de:
+    # DJ Tagger.app/Contents/...
     current_file = os.path.abspath(__file__)
 
     if ".app/Contents/" in current_file:
@@ -173,46 +170,60 @@ def install_update(zip_path):
             ".app/Contents/"
         )[0] + ".app"
     else:
-        # Ejecución desde el proyecto: usar la aplicación instalada.
+        # Si se ejecuta desde el proyecto, actualizar la app instalada.
         current_app_path = "/Applications/DJ Tagger.app"
 
+    # No usamos "python3" para el actualizador porque una instalación
+    # normal de macOS no tiene por qué tener Python disponible.
+    # /bin/sh y /usr/bin/ditto sí forman parte de macOS.
     updater_script = os.path.join(
         tempfile.gettempdir(),
-        "dj_tagger_apply_update.py",
+        "dj_tagger_apply_update.sh",
     )
 
-    script = f'''import os
-import shutil
-import subprocess
-import time
+    shell_quote = lambda value: "'" + value.replace("'", "'\\''") + "'"
 
-old_app = {current_app_path!r}
-new_app = {new_app_path!r}
-updater_script = {updater_script!r}
+    old_app = shell_quote(current_app_path)
+    new_app = shell_quote(new_app_path)
+    script_path = shell_quote(updater_script)
 
-time.sleep(2)
+    script = f"""#!/bin/sh
 
-try:
-    if os.path.exists(old_app):
-        shutil.rmtree(old_app)
+OLD_APP={old_app}
+NEW_APP={new_app}
+UPDATER_SCRIPT={script_path}
 
-    shutil.copytree(
-        new_app,
-        old_app,
-    )
+# Dar tiempo a DJ Tagger para cerrar completamente.
+sleep 2
 
-    subprocess.Popen(
-        ["open", old_app],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+# Esperar un poco más si el proceso todavía mantiene abierta la app.
+for i in 1 2 3 4 5; do
+    if /usr/bin/pgrep -f "$OLD_APP/Contents/MacOS/" >/dev/null 2>&1; then
+        sleep 1
+    else
+        break
+    fi
+done
 
-finally:
-    try:
-        os.remove(updater_script)
-    except Exception:
-        pass
-'''
+# Eliminar la versión instalada y copiar la nueva.
+if [ -d "$OLD_APP" ]; then
+    /bin/rm -rf "$OLD_APP"
+fi
+
+/usr/bin/ditto "$NEW_APP" "$OLD_APP"
+
+# Abrir la nueva versión.
+ /usr/bin/open "$OLD_APP" >/dev/null 2>&1 &
+
+# Limpiar los archivos temporales después de abrir la app.
+(
+    sleep 3
+    /bin/rm -rf "$(dirname "$NEW_APP")"
+    /bin/rm -f "$UPDATER_SCRIPT"
+) >/dev/null 2>&1 &
+
+exit 0
+"""
 
     with open(
         updater_script,
@@ -221,9 +232,15 @@ finally:
     ) as file:
         file.write(script)
 
+    os.chmod(
+        updater_script,
+        0o755,
+    )
+
+    # Ejecutar el script con /bin/sh, disponible en cualquier macOS.
     subprocess.Popen(
         [
-            "python3",
+            "/bin/sh",
             updater_script,
         ],
         stdout=subprocess.DEVNULL,
