@@ -163,17 +163,18 @@ def install_update(zip_path):
             "El ZIP descargado no contiene 'DJ Tagger.app'."
         )
 
-    current_app_path = os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            "DJ Tagger.app",
-        )
-    )
+    # Determinar la aplicación que está ejecutándose.
+    # Cuando DJ Tagger está empaquetado como .app, __file__ está dentro de:
+    # DJ Tagger.app/Contents/MacOS/
+    current_file = os.path.abspath(__file__)
 
-    if ".app/Contents/" in current_app_path:
-        current_app_path = current_app_path.split(
+    if ".app/Contents/" in current_file:
+        current_app_path = current_file.split(
             ".app/Contents/"
         )[0] + ".app"
+    else:
+        # Ejecución desde el proyecto: usar la aplicación instalada.
+        current_app_path = "/Applications/DJ Tagger.app"
 
     updater_script = os.path.join(
         tempfile.gettempdir(),

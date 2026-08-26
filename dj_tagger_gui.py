@@ -25,7 +25,7 @@ except ImportError:
     TkinterDnD = None
 
 import dj_tagger as core
-from updater import check_for_update
+from updater import check_for_update, download_update, install_update
 
 
 class TextRedirector:
@@ -625,7 +625,7 @@ class DJTaggerApp:
 
     def _check_for_updates(self):
         try:
-            from updater import check_for_update
+            from updater import check_for_update, download_update, install_update
 
             def worker():
                 try:
@@ -675,13 +675,58 @@ class DJTaggerApp:
             APP_VERSION,
         )
 
-        messagebox.showinfo(
+        download_url = result.get("download_url")
+
+        answer = messagebox.askyesno(
             "Actualización disponible",
             f"Hay una nueva versión de DJ Tagger.\n\n"
             f"Versión actual: {current_version}\n"
             f"Nueva versión: {latest_version}\n\n"
-            f"Puedes descargarla desde GitHub.",
+            f"¿Quieres descargarla e instalarla ahora?",
         )
+
+        if not answer:
+            return
+
+        if not download_url:
+            messagebox.showerror(
+                "Error de actualización",
+                "No se encontró el archivo de actualización en GitHub.",
+            )
+            return
+
+        self._log(
+            f"Descargando DJ Tagger {latest_version}...\n"
+        )
+
+        def update_worker():
+            try:
+                zip_path = download_update(download_url)
+
+                self.root.after(
+                    0,
+                    lambda: self._log(
+                        "Descarga completada. Instalando actualización...\n"
+                    ),
+                )
+
+                install_update(zip_path)
+
+                self.root.after(
+                    0,
+                    self.root.destroy,
+                )
+
+            except Exception as exc:
+                self.root.after(
+                    0,
+                    lambda e=exc: messagebox.showerror(
+                        "Error de actualización",
+                        f"No se pudo instalar la actualización.\n\n{e}",
+                    ),
+                )
+
+        self._run_in_thread(update_worker)
 
     def _build_ui(self):
         pad = {"padx": 10, "pady": 6}
