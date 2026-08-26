@@ -714,6 +714,12 @@ class DJTaggerApp:
 
                 self.root.after(
                     0,
+                    lambda: self._log(
+                        "Actualización preparada. DJ Tagger se cerrará para completar la instalación...\n",
+                    ),
+                )
+                self.root.after(
+                    1000,
                     self.root.destroy,
                 )
 

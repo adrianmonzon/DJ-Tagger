@@ -38,6 +38,7 @@ def _get_latest_release():
             "User-Agent": "DJ-Tagger",
         },
     )
+
     context = _create_ssl_context()
 
     with urllib.request.urlopen(
@@ -53,6 +54,7 @@ def _get_latest_release():
 def check_for_update():
     try:
         data = _get_latest_release()
+
         latest_version = data["tag_name"].lstrip("v")
 
         if version_tuple(latest_version) > version_tuple(APP_VERSION):
@@ -131,6 +133,16 @@ def download_update(download_url):
             output_file,
         )
 
+    if not os.path.isfile(zip_path):
+        raise RuntimeError(
+            "La descarga terminó pero no se encontró el ZIP."
+        )
+
+    if os.path.getsize(zip_path) == 0:
+        raise RuntimeError(
+            "El ZIP descargado está vacío."
+        )
+
     return zip_path
 
 
@@ -144,11 +156,26 @@ def install_update(zip_path):
         prefix="dj_tagger_extract_"
     )
 
-    with zipfile.ZipFile(
-        zip_path,
-        "r",
-    ) as archive:
-        archive.extractall(extract_dir)
+    # Usar ditto para extraer el ZIP en macOS.
+    # zipfile.extractall() puede perder permisos ejecutables
+    # necesarios para el binario principal de la aplicación.
+    result = subprocess.run(
+        [
+            "/usr/bin/ditto",
+            "-x",
+            "-k",
+            zip_path,
+            extract_dir,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "No se pudo extraer la actualización: "
+            + (result.stderr.strip() or "error desconocido")
+        )
 
     new_app_path = os.path.join(
         extract_dir,
@@ -160,9 +187,6 @@ def install_update(zip_path):
             "El ZIP descargado no contiene 'DJ Tagger.app'."
         )
 
-    # Determinar la aplicación que está ejecutándose.
-    # En una app empaquetada, __file__ está dentro de:
-    # DJ Tagger.app/Contents/...
     current_file = os.path.abspath(__file__)
 
     if ".app/Contents/" in current_file:
@@ -170,57 +194,102 @@ def install_update(zip_path):
             ".app/Contents/"
         )[0] + ".app"
     else:
-        # Si se ejecuta desde el proyecto, actualizar la app instalada.
         current_app_path = "/Applications/DJ Tagger.app"
 
-    # No usamos "python3" para el actualizador porque una instalación
-    # normal de macOS no tiene por qué tener Python disponible.
-    # /bin/sh y /usr/bin/ditto sí forman parte de macOS.
     updater_script = os.path.join(
         tempfile.gettempdir(),
         "dj_tagger_apply_update.sh",
     )
 
-    shell_quote = lambda value: "'" + value.replace("'", "'\\''") + "'"
+    log_file = os.path.join(
+        tempfile.gettempdir(),
+        "dj_tagger_update.log",
+    )
+
+    def shell_quote(value):
+        return "'" + value.replace("'", "'\\''") + "'"
 
     old_app = shell_quote(current_app_path)
     new_app = shell_quote(new_app_path)
-    script_path = shell_quote(updater_script)
+    updater = shell_quote(updater_script)
+    log = shell_quote(log_file)
 
     script = f"""#!/bin/sh
 
-OLD_APP={old_app}
-NEW_APP={new_app}
-UPDATER_SCRIPT={script_path}
+LOG_FILE={log}
 
-# Dar tiempo a DJ Tagger para cerrar completamente.
-sleep 2
+exec >>"$LOG_FILE" 2>&1
 
-# Esperar un poco más si el proceso todavía mantiene abierta la app.
-for i in 1 2 3 4 5; do
-    if /usr/bin/pgrep -f "$OLD_APP/Contents/MacOS/" >/dev/null 2>&1; then
+echo "========================================"
+echo "DJ Tagger update started"
+echo "$(date)"
+echo "OLD_APP={old_app}"
+echo "NEW_APP={new_app}"
+echo "========================================"
+
+echo "Esperando a que DJ Tagger cierre..."
+
+sleep 3
+
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    if /usr/bin/pgrep -f "{current_app_path}/Contents/MacOS/" >/dev/null 2>&1; then
+        echo "DJ Tagger sigue ejecutándose. Esperando..."
         sleep 1
     else
+        echo "DJ Tagger ya está cerrado."
         break
     fi
 done
 
-# Eliminar la versión instalada y copiar la nueva.
-if [ -d "$OLD_APP" ]; then
-    /bin/rm -rf "$OLD_APP"
+echo "Comprobando nueva aplicación..."
+
+if [ ! -d {new_app} ]; then
+    echo "ERROR: No existe la nueva aplicación."
+    exit 1
 fi
 
-/usr/bin/ditto "$NEW_APP" "$OLD_APP"
+echo "Eliminando aplicación antigua..."
 
-# Abrir la nueva versión.
- /usr/bin/open "$OLD_APP" >/dev/null 2>&1 &
+if [ -d {old_app} ]; then
+    /bin/rm -rf {old_app}
 
-# Limpiar los archivos temporales después de abrir la app.
-(
-    sleep 3
-    /bin/rm -rf "$(dirname "$NEW_APP")"
-    /bin/rm -f "$UPDATER_SCRIPT"
-) >/dev/null 2>&1 &
+    if [ -d {old_app} ]; then
+        echo "ERROR: No se pudo eliminar la aplicación antigua."
+        exit 1
+    fi
+fi
+
+echo "Copiando nueva aplicación..."
+
+/usr/bin/ditto {new_app} {old_app}
+
+if [ ! -d {old_app} ]; then
+    echo "ERROR: ditto no creó la aplicación nueva."
+    exit 1
+fi
+
+echo "Abriendo nueva aplicación..."
+
+/usr/bin/open -a {old_app}
+
+OPEN_RESULT=$?
+
+echo "Resultado de open: $OPEN_RESULT"
+
+if [ $OPEN_RESULT -ne 0 ]; then
+    echo "ERROR: No se pudo abrir la nueva aplicación."
+    exit 1
+fi
+
+echo "Actualización completada correctamente."
+
+sleep 5
+
+/bin/rm -rf "$(dirname {new_app})"
+
+echo "Archivos temporales eliminados."
+
+/bin/rm -f {updater}
 
 exit 0
 """
@@ -237,7 +306,6 @@ exit 0
         0o755,
     )
 
-    # Ejecutar el script con /bin/sh, disponible en cualquier macOS.
     subprocess.Popen(
         [
             "/bin/sh",
