@@ -25,7 +25,12 @@ except ImportError:
     TkinterDnD = None
 
 import dj_tagger as core
-from updater import check_for_update, download_update, install_update
+from updater import (
+    check_for_update,
+    download_update,
+    install_update,
+    read_and_clear_update_flag,
+)
 
 
 class TextRedirector:
@@ -67,6 +72,10 @@ class DJTaggerApp:
         self._apply_modern_appearance()
         self._poll_log_queue()
         self._appearance_check()
+
+        # Si la app se acaba de actualizar sola, avisamos una vez y
+        # borramos la marca para no volver a mostrarlo en futuros arranques.
+        self.root.after(300, self._notify_if_just_updated)
 
         # Comprobar actualizaciones en segundo plano para no bloquear la interfaz.
         threading.Thread(
@@ -623,6 +632,21 @@ class DJTaggerApp:
 
         self.root.after(0, update)
 
+    def _notify_if_just_updated(self):
+        try:
+            installed_version = read_and_clear_update_flag()
+        except Exception:
+            installed_version = None
+
+        if not installed_version:
+            return
+
+        messagebox.showinfo(
+            "Actualización completada",
+            f"Actualización completada con éxito. "
+            f"DJ Tagger se ha actualizado a la versión {installed_version}.",
+        )
+
     def _check_for_updates(self):
         try:
             from updater import check_for_update, download_update, install_update
@@ -710,7 +734,7 @@ class DJTaggerApp:
                     ),
                 )
 
-                install_update(zip_path)
+                install_update(zip_path, latest_version)
 
                 self.root.after(
                     0,

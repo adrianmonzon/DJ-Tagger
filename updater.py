@@ -17,11 +17,42 @@ GITHUB_API_URL = "https://api.github.com/repos/adrianmonzon/DJ-Tagger/releases/l
 # Nombre del bundle .app tal y como lo genera el build (PyInstaller/py2app).
 APP_BUNDLE_NAME = "DJ Tagger.app"
 
+# Archivo donde el script de instalación deja constancia de a qué versión
+# se actualizó con éxito. La GUI lo lee al arrancar para mostrar el aviso
+# de "Actualización completada" una sola vez, y luego lo borra.
+UPDATE_FLAG_PATH = os.path.join(
+    os.path.expanduser("~"),
+    "Library",
+    "Application Support",
+    "DJ Tagger",
+    "last_update.json",
+)
+
 # El nombre del asset del ZIP en el Release de GitHub puede variar un poco
 # entre publicaciones (espacios, guiones, mayúsculas...). Para no depender
 # de un match exacto, exigimos solo que contenga "dj" y "tagger" y termine
 # en .zip.
 _ASSET_NAME_RE = re.compile(r"dj[\s_-]*tagger.*\.zip$", re.IGNORECASE)
+
+
+def read_and_clear_update_flag():
+    """Si la última actualización se completó con éxito, devuelve la
+    versión instalada y borra la marca (para no volver a avisar). Si no
+    hay marca pendiente, devuelve None.
+    """
+    try:
+        with open(UPDATE_FLAG_PATH, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        version = data.get("version")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+
+    try:
+        os.remove(UPDATE_FLAG_PATH)
+    except OSError:
+        pass
+
+    return version
 
 
 def version_tuple(version):
@@ -146,7 +177,7 @@ def _resolve_current_app_path():
     return os.path.join("/Applications", APP_BUNDLE_NAME)
 
 
-def install_update(zip_path):
+def install_update(zip_path, new_version=None):
     if not os.path.isfile(zip_path):
         raise FileNotFoundError(
             f"No se encontró el archivo descargado: {zip_path}"
@@ -213,6 +244,10 @@ def install_update(zip_path):
     updater = shell_quote(updater_script)
     log = shell_quote(log_file)
     executable_name = os.path.splitext(APP_BUNDLE_NAME)[0]
+
+    flag_dir = shell_quote(os.path.dirname(UPDATE_FLAG_PATH))
+    flag_path = shell_quote(UPDATE_FLAG_PATH)
+    flag_version = (new_version or "").replace('"', '\\"')
 
     # Instalación atómica: la app vieja se renombra a un backup (no se
     # borra), se copia la nueva y solo si todo va bien se elimina el
@@ -290,6 +325,13 @@ echo "Nueva aplicación instalada correctamente."
 if [ $BACKUP_MADE -eq 1 ]; then
     /bin/rm -rf {backup_app}
 fi
+
+echo "Dejando constancia de la actualización completada..."
+
+/bin/mkdir -p {flag_dir}
+/bin/cat > {flag_path} << FLAGEOF
+{{"version": "{flag_version}"}}
+FLAGEOF
 
 echo "Abriendo nueva aplicación..."
 
