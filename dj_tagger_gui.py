@@ -2441,6 +2441,10 @@ class DJTaggerApp:
             "Comprobando cambios en la biblioteca..."
         )
 
+        self.lib_progressbar.configure(mode="indeterminate")
+        self.lib_progressbar.start(12)
+        self.lib_progress_text_var.set("Comprobando cambios...")
+
         self._run_in_thread(
             self._update_library_worker
         )
@@ -2516,29 +2520,31 @@ class DJTaggerApp:
                 )
                 return
 
-            # Obtener únicamente las canciones nuevas.
-            added_tracks = []
+            # Obtener únicamente las canciones nuevas, todas en una sola
+            # llamada a AppleScript (mucho más rápido que pedirlas una a
+            # una cuando se añaden varias canciones de golpe).
+            self.root.after(
+                0,
+                lambda total=len(added_ids): self._update_library_progress(
+                    0, total, indeterminate=True
+                ),
+            )
 
-            for index, database_id in enumerate(sorted(added_ids), 1):
-                print(
-                    f"Obteniendo canción nueva "
-                    f"{index}/{len(added_ids)} "
-                    f"(ID {database_id})..."
-                )
+            print(
+                f"Obteniendo {len(added_ids)} canción(es) nueva(s) "
+                f"en una sola consulta..."
+            )
 
-                track = core.get_apple_music_track_by_database_id(
-                    database_id
-                )
+            added_tracks = core.get_apple_music_tracks_by_database_ids(
+                sorted(added_ids)
+            )
 
-                if track is not None:
-                    added_tracks.append(track)
-
-                self.root.after(
-                    0,
-                    lambda done=index, total=len(added_ids): (
-                        self._update_library_progress(done, total)
-                    ),
-                )
+            self.root.after(
+                0,
+                lambda done=len(added_tracks), total=len(added_ids): (
+                    self._update_library_progress(done, total)
+                ),
+            )
 
             # Mantener las canciones existentes y quitar únicamente
             # las que ya no están en Apple Music.
@@ -2591,6 +2597,9 @@ class DJTaggerApp:
         self.load_lib_btn.configure(
             state="normal",
         )
+
+        self.lib_progressbar.stop()
+        self.lib_progressbar.configure(mode="determinate")
 
         if error_message:
             self.lib_status_var.set(
@@ -2647,7 +2656,21 @@ class DJTaggerApp:
         self,
         done,
         total,
+        indeterminate=False,
     ):
+        if indeterminate:
+            self.lib_progressbar.configure(mode="indeterminate")
+            self.lib_progressbar.start(12)
+            self.lib_progress_text_var.set(
+                f"Obteniendo {total} canción(es) nueva(s)..."
+                if total
+                else "Obteniendo canciones nuevas..."
+            )
+            return
+
+        self.lib_progressbar.stop()
+        self.lib_progressbar.configure(mode="determinate")
+
         if total > 0:
             self.lib_progressbar.configure(
                 maximum=total,

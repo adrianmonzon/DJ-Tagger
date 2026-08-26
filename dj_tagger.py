@@ -621,7 +621,12 @@ end tell
 
 
 def get_apple_music_track_by_database_id(database_id):
-    """Obtiene los datos de una única canción mediante su database ID."""
+    """Obtiene los datos de una única canción mediante su database ID.
+
+    Usa un filtro nativo `whose database ID is X`, que AppleScript resuelve
+    internamente sin tener que recorrer y leer propiedad a propiedad cada
+    track de la biblioteca (mucho más rápido que un `repeat` manual).
+    """
     if sys.platform != "darwin":
         return None
 
@@ -632,17 +637,11 @@ def get_apple_music_track_by_database_id(database_id):
 
     script = f"""
 tell application "Music"
-    set matchingTracks to (every track of library playlist 1 whose media kind is song)
     set targetTrack to missing value
 
-    repeat with t in matchingTracks
-        try
-            if (database ID of t) is {database_id} then
-                set targetTrack to t
-                exit repeat
-            end if
-        end try
-    end repeat
+    try
+        set targetTrack to (first track of library playlist 1 whose database ID is {database_id})
+    end try
 
     if targetTrack is missing value then
         return ""
@@ -713,6 +712,147 @@ end tell
 
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
+
+
+def get_apple_music_tracks_by_database_ids(database_ids):
+    """Obtiene los datos de VARIAS canciones nuevas en una única llamada
+    a AppleScript.
+
+    Cuando se añaden varias canciones de golpe a Apple Music, pedirlas una
+    a una (una llamada `osascript` por canción) es lento: cada llamada
+    tiene que arrancar el intérprete de AppleScript y hablar con Music.app
+    por separado. Esta función hace un único recorrido de la biblioteca y
+    recoge todas las canciones nuevas que coincidan con los IDs pedidos,
+    en una sola invocación.
+    """
+    if sys.platform != "darwin":
+        return []
+
+    ids = []
+    for raw_id in database_ids:
+        try:
+            ids.append(int(raw_id))
+        except (TypeError, ValueError):
+            continue
+
+    if not ids:
+        return []
+
+    ids_literal = "{" + ", ".join(str(i) for i in ids) + "}"
+
+    script = f"""
+set targetIDs to {ids_literal}
+set nameList to {{}}
+set artistList to {{}}
+set dateList to {{}}
+set typeList to {{}}
+set idList to {{}}
+
+tell application "Music"
+    set matchingTracks to (every track of library playlist 1 whose media kind is song)
+
+    repeat with t in matchingTracks
+        try
+            set thisID to (database ID of t)
+
+            if targetIDs contains thisID then
+                set trackName to ""
+                set trackArtist to ""
+                set trackDateStr to ""
+                set trackType to "streaming"
+
+                try
+                    set trackName to (name of t)
+                end try
+
+                try
+                    set trackArtist to (artist of t)
+                end try
+
+                try
+                    set trackDateStr to ((date added of t) as string)
+                end try
+
+                try
+                    set trackClass to (class of t) as string
+
+                    if trackClass contains "file track" then
+                        set trackType to "local"
+                    else
+                        set trackType to "streaming"
+                    end if
+                end try
+
+                set end of nameList to trackName
+                set end of artistList to trackArtist
+                set end of dateList to trackDateStr
+                set end of typeList to trackType
+                set end of idList to (thisID as string)
+            end if
+        end try
+    end repeat
+end tell
+
+set AppleScript's text item delimiters to "|||"
+
+set nameText to nameList as string
+set artistText to artistList as string
+set dateText to dateList as string
+set typeText to typeList as string
+set idText to idList as string
+
+set AppleScript's text item delimiters to ""
+
+return nameText & "###SEP###" & artistText & "###SEP###" & dateText & "###SEP###" & typeText & "###SEP###" & idText
+"""
+
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return []
+
+    output = result.stdout.strip()
+
+    if not output:
+        return []
+
+    parts = output.split("###SEP###")
+
+    if len(parts) < 5:
+        return []
+
+    name_part, artist_part, date_part, type_part, id_part = parts[:5]
+
+    names = name_part.split("|||") if name_part else []
+    artists = artist_part.split("|||") if artist_part else []
+    date_strs = date_part.split("|||") if date_part else []
+    types = type_part.split("|||") if type_part else []
+    found_ids = id_part.split("|||") if id_part else []
+
+    n = min(
+        len(names),
+        len(artists),
+        len(date_strs),
+        len(types),
+        len(found_ids),
+    )
+
+    return [
+        (
+            names[i],
+            artists[i],
+            _parse_music_date_string(date_strs[i]),
+            types[i],
+            found_ids[i],
+        )
+        for i in range(n)
+    ]
 
 
 def get_apple_music_library(progress_callback=None, batch_size: int = 50, start_index: int = 1):

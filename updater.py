@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import ssl
 import subprocess
@@ -13,9 +14,43 @@ from version import APP_VERSION
 
 GITHUB_API_URL = "https://api.github.com/repos/adrianmonzon/DJ-Tagger/releases/latest"
 
+# Nombre del bundle .app tal y como lo genera el build (PyInstaller/py2app).
+APP_BUNDLE_NAME = "DJ Tagger.app"
+
+# El nombre del asset del ZIP en el Release de GitHub puede variar un poco
+# entre publicaciones (espacios, guiones, mayúsculas...). Para no depender
+# de un match exacto, exigimos solo que contenga "dj" y "tagger" y termine
+# en .zip.
+_ASSET_NAME_RE = re.compile(r"dj[\s_-]*tagger.*\.zip$", re.IGNORECASE)
+
 
 def version_tuple(version):
-    return tuple(int(part) for part in version.lstrip("v").split("."))
+    """Convierte un string de versión (p.ej. 'v1.0.21' o '1.0.21-beta') en
+    una tupla de enteros comparable. Cualquier sufijo no numérico en un
+    segmento se ignora en vez de hacer que todo el parseo falle.
+    """
+    version = (version or "").strip()
+
+    if version.lower().startswith("v"):
+        version = version[1:]
+
+    parts = re.split(r"[.\-+]", version)
+    result = []
+
+    for part in parts:
+        match = re.match(r"\d+", part)
+        if match:
+            result.append(int(match.group()))
+
+    return tuple(result) if result else (0,)
+
+
+def _find_update_asset(assets):
+    for asset in assets or []:
+        name = asset.get("name", "")
+        if _ASSET_NAME_RE.search(name):
+            return asset.get("browser_download_url")
+    return None
 
 
 def _create_ssl_context():
@@ -42,15 +77,10 @@ def _get_latest_release():
 def check_for_update():
     try:
         data = _get_latest_release()
-        latest_version = data["tag_name"].lstrip("v")
+        latest_version = data["tag_name"].lstrip("vV")
 
         if version_tuple(latest_version) > version_tuple(APP_VERSION):
-            download_url = None
-
-            for asset in data.get("assets", []):
-                if asset.get("name", "").lower() == "dj tagger-macos.zip":
-                    download_url = asset.get("browser_download_url")
-                    break
+            download_url = _find_update_asset(data.get("assets"))
 
             return {
                 "available": True,
@@ -107,6 +137,15 @@ def download_update(download_url):
     return zip_path
 
 
+def _resolve_current_app_path():
+    current_file = os.path.abspath(__file__)
+
+    if ".app/Contents/" in current_file:
+        return current_file.split(".app/Contents/")[0] + ".app"
+
+    return os.path.join("/Applications", APP_BUNDLE_NAME)
+
+
 def install_update(zip_path):
     if not os.path.isfile(zip_path):
         raise FileNotFoundError(
@@ -133,25 +172,27 @@ def install_update(zip_path):
             + (result.stderr.strip() or "error desconocido")
         )
 
-    new_app_path = os.path.join(
-        extract_dir,
-        "DJ Tagger.app",
+    # El ZIP puede traer el .app directamente en la raíz, o dentro de una
+    # única carpeta contenedora. Buscamos en ambos sitios.
+    candidate_paths = [os.path.join(extract_dir, APP_BUNDLE_NAME)]
+
+    for entry in os.listdir(extract_dir):
+        nested = os.path.join(extract_dir, entry, APP_BUNDLE_NAME)
+        if os.path.isdir(nested):
+            candidate_paths.append(nested)
+
+    new_app_path = next(
+        (path for path in candidate_paths if os.path.isdir(path)),
+        None,
     )
 
-    if not os.path.isdir(new_app_path):
+    if new_app_path is None:
         raise RuntimeError(
-            "El ZIP descargado no contiene 'DJ Tagger.app'."
+            f"El ZIP descargado no contiene '{APP_BUNDLE_NAME}'."
         )
 
-    current_file = os.path.abspath(__file__)
-
-    if ".app/Contents/" in current_file:
-        current_app_path = (
-            current_file.split(".app/Contents/")[0]
-            + ".app"
-        )
-    else:
-        current_app_path = "/Applications/DJ Tagger.app"
+    current_app_path = _resolve_current_app_path()
+    backup_app_path = current_app_path + ".update-backup"
 
     updater_script = os.path.join(
         tempfile.gettempdir(),
@@ -167,10 +208,16 @@ def install_update(zip_path):
         return "'" + value.replace("'", "'\\''") + "'"
 
     old_app = shell_quote(current_app_path)
+    backup_app = shell_quote(backup_app_path)
     new_app = shell_quote(new_app_path)
     updater = shell_quote(updater_script)
     log = shell_quote(log_file)
+    executable_name = os.path.splitext(APP_BUNDLE_NAME)[0]
 
+    # Instalación atómica: la app vieja se renombra a un backup (no se
+    # borra), se copia la nueva y solo si todo va bien se elimina el
+    # backup. Si algo falla a mitad, se restaura el backup, así el usuario
+    # nunca se queda sin una app funcional instalada.
     script = f"""#!/bin/sh
 
 LOG_FILE={log}
@@ -188,7 +235,7 @@ echo "Esperando a que DJ Tagger cierre..."
 sleep 3
 
 for i in 1 2 3 4 5 6 7 8 9 10; do
-    if /usr/bin/pgrep -f "DJ Tagger.app/Contents/MacOS/DJ Tagger" >/dev/null 2>&1; then
+    if /usr/bin/pgrep -f "{os.path.basename(current_app_path)}/Contents/MacOS/" >/dev/null 2>&1; then
         echo "DJ Tagger sigue ejecutándose. Esperando..."
         sleep 1
     else
@@ -204,19 +251,44 @@ if [ ! -d {new_app} ]; then
     exit 1
 fi
 
-echo "Eliminando aplicación antigua..."
+# Nos aseguramos de no arrastrar un backup de un intento anterior fallido.
+if [ -d {backup_app} ]; then
+    /bin/rm -rf {backup_app}
+fi
+
+BACKUP_MADE=0
 
 if [ -d {old_app} ]; then
-    /bin/rm -rf {old_app}
+    echo "Guardando copia de seguridad de la app actual..."
+    /bin/mv {old_app} {backup_app}
+    if [ $? -ne 0 ]; then
+        echo "ERROR: No se pudo hacer copia de seguridad de la app actual."
+        exit 1
+    fi
+    BACKUP_MADE=1
 fi
 
 echo "Copiando nueva aplicación..."
 
 /usr/bin/ditto {new_app} {old_app}
+DITTO_RESULT=$?
 
-if [ ! -d {old_app} ]; then
-    echo "ERROR: ditto no creó la aplicación nueva."
+if [ $DITTO_RESULT -ne 0 ] || [ ! -d {old_app} ] || [ ! -x "{current_app_path}/Contents/MacOS/{executable_name}" ]; then
+    echo "ERROR: la copia de la nueva app falló o quedó incompleta."
+
+    if [ $BACKUP_MADE -eq 1 ]; then
+        echo "Restaurando la versión anterior..."
+        /bin/rm -rf {old_app}
+        /bin/mv {backup_app} {old_app}
+    fi
+
     exit 1
+fi
+
+echo "Nueva aplicación instalada correctamente."
+
+if [ $BACKUP_MADE -eq 1 ]; then
+    /bin/rm -rf {backup_app}
 fi
 
 echo "Abriendo nueva aplicación..."
@@ -228,7 +300,7 @@ OPEN_RESULT=$?
 echo "Resultado de open: $OPEN_RESULT"
 
 if [ $OPEN_RESULT -ne 0 ]; then
-    echo "ERROR: No se pudo abrir la nueva aplicación."
+    echo "ERROR: No se pudo abrir la nueva aplicación (pero la instalación se completó)."
     exit 1
 fi
 
