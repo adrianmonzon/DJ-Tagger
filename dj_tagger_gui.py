@@ -1556,6 +1556,34 @@ class DJTaggerApp:
         if not mp3_files:
             return
 
+        # Evitar rutas duplicadas dentro del mismo lote: si el mismo
+        # archivo aparece dos veces (doble selección, carpetas que se
+        # solapan...), procesar la misma ruta en dos filas distintas
+        # puede acabar mezclando qué título/artista corresponde a cuál.
+        # Nos quedamos solo con la primera aparición de cada ruta.
+        seen_paths = set()
+        deduped_files = []
+        duplicates_skipped = 0
+
+        for filepath in mp3_files:
+            normalized = os.path.abspath(filepath)
+
+            if normalized in seen_paths:
+                duplicates_skipped += 1
+                continue
+
+            seen_paths.add(normalized)
+            deduped_files.append(filepath)
+
+        if duplicates_skipped:
+            self._log(
+                f"Se han omitido {duplicates_skipped} archivo(s) "
+                f"repetido(s) en la selección (misma ruta añadida "
+                f"más de una vez).\n"
+            )
+
+        mp3_files = deduped_files
+
         self._show_processing_area(mp3_files)
 
         self._run_in_thread(
@@ -1765,119 +1793,16 @@ class DJTaggerApp:
 
             return
 
-        # Solo Canción y Artista son editables.
-        if not row or column not in ("#2", "#3"):
-            return
-
-        bbox = self.processing_tree.bbox(
-            row,
-            column,
-        )
-
-        if not bbox:
-            return
-
-        x, y, width, height = bbox
-
-        values = list(
-            self.processing_tree.item(
-                row,
-                "values",
-            )
-        )
-
-        column_index = 1 if column == "#2" else 2
-
-        if len(values) <= column_index:
-            return
-
-        old_value = values[column_index]
-
-        if self._processing_edit is not None:
-            try:
-                self._processing_edit.destroy()
-            except Exception:
-                pass
-
-        entry = tk.Entry(
-            self.processing_tree,
-            relief="solid",
-            bd=1,
-            highlightthickness=1,
-            font=("Helvetica", 10),
-        )
-
-        entry.insert(
-            0,
-            old_value,
-        )
-
-        entry.select_range(
-            0,
-            "end",
-        )
-
-        entry.place(
-            x=x,
-            y=y,
-            width=width,
-            height=height,
-        )
-
-        self._processing_edit = entry
-
-        def save(event=None):
-            new_value = entry.get().strip()
-
-            values[column_index] = new_value
-
-            self.processing_tree.item(
-                row,
-                values=tuple(values),
-            )
-
-            filepath = self._processing_paths.get(row)
-
-            if filepath:
-                for result in self._processing_results:
-                    if result.get("filepath") == filepath:
-                        if column_index == 1:
-                            result["title"] = new_value
-                        elif column_index == 2:
-                            result["artist"] = new_value
-                        break
-
-            try:
-                entry.destroy()
-            except Exception:
-                pass
-
-            self._processing_edit = None
-
-        def cancel(event=None):
-            try:
-                entry.destroy()
-            except Exception:
-                pass
-
-            self._processing_edit = None
-
-        entry.bind(
-            "<Return>",
-            save,
-        )
-
-        entry.bind(
-            "<Escape>",
-            cancel,
-        )
-
-        entry.bind(
-            "<FocusOut>",
-            save,
-        )
-
-        entry.focus_set()
+        # El resto de columnas (Canción/Artista) se editan directamente
+        # sobre los campos de texto que ya están siempre visibles en la
+        # fila (ver _create_processing_editors), así que aquí no hace
+        # falta ningún editor flotante adicional. Tener dos mecanismos de
+        # edición distintos sobre la misma celda era además un foco de
+        # bugs: si este editor llegaba a activarse en el momento
+        # equivocado (p. ej. justo durante un reintento), emparejaba los
+        # cambios por ruta de archivo en vez de por fila, y con archivos
+        # de ruta coincidente podía acabar aplicando el título/artista de
+        # una canción a otra.
 
     def _confirm_processing_preview(
         self,
@@ -2076,7 +2001,7 @@ class DJTaggerApp:
                 )
 
                 for result_item in self._processing_results:
-                    if result_item.get("filepath") == self._processing_paths.get(item_id):
+                    if result_item.get("_item_id") == item_id:
                         if current_title is not None:
                             result_item["title"] = (
                                 current_title.get().strip()
@@ -2529,17 +2454,21 @@ class DJTaggerApp:
                 )
                 continue
 
-            # Buscar la fila correspondiente.
-            item_id = None
+            # Buscar la fila correspondiente. Se usa el identificador
+            # único de fila guardado en el propio resultado (más fiable
+            # que comparar rutas como texto, sobre todo si hubiera rutas
+            # coincidentes entre distintas filas).
+            item_id = result.get("_item_id")
 
-            for iid, path in getattr(
-                self,
-                "_processing_paths",
-                {},
-            ).items():
-                if str(path) == filepath:
-                    item_id = iid
-                    break
+            if item_id is None:
+                for iid, path in getattr(
+                    self,
+                    "_processing_paths",
+                    {},
+                ).items():
+                    if str(path) == filepath:
+                        item_id = iid
+                        break
 
             # Mostrar que esta canción se está procesando.
             if item_id is not None:
@@ -3307,6 +3236,29 @@ class DJTaggerApp:
                 "No se han seleccionado archivos MP3.",
             )
             return
+
+        seen_paths = set()
+        deduped_files = []
+        duplicates_skipped = 0
+
+        for filepath in mp3_files:
+            normalized = os.path.abspath(filepath)
+
+            if normalized in seen_paths:
+                duplicates_skipped += 1
+                continue
+
+            seen_paths.add(normalized)
+            deduped_files.append(filepath)
+
+        if duplicates_skipped:
+            self._log(
+                f"Se han omitido {duplicates_skipped} archivo(s) "
+                f"repetido(s) en la selección (misma ruta añadida "
+                f"más de una vez).\n"
+            )
+
+        mp3_files = deduped_files
 
         self._show_processing_area(mp3_files)
 
