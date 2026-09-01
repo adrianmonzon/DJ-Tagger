@@ -48,6 +48,13 @@ from mutagen.mp3 import MP3
 
 ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
 
+# La API de iTunes Search limita las peticiones por minuto y por IP.
+# Cuando se procesan varias canciones seguidas (cada una lanza varias
+# búsquedas), es fácil chocar con ese límite. Reintentamos con espera
+# creciente en vez de fallar a la primera.
+_ITUNES_MAX_RETRIES = 4
+_ITUNES_RETRY_BASE_DELAY = 2.0
+
 # Ajusta esto a como quieras que se llamen los géneros en tus playlists
 # inteligentes. La clave es lo que devuelve iTunes, el valor es lo que
 # se escribe en el archivo.
@@ -120,15 +127,70 @@ def _clean_filename_title(title: str) -> str:
 def _itunes_results(term: str):
     if not term.strip():
         return []
+
     params = {
         "term": term,
         "media": "music",
         "entity": "song",
         "limit": 25,
     }
-    resp = requests.get(ITUNES_SEARCH_URL, params=params, timeout=10)
-    resp.raise_for_status()
-    return resp.json().get("results", [])
+
+    last_error = None
+
+    for attempt in range(_ITUNES_MAX_RETRIES):
+        try:
+            resp = requests.get(
+                ITUNES_SEARCH_URL,
+                params=params,
+                timeout=10,
+            )
+
+            # 403/429 son las respuestas típicas cuando iTunes empieza a
+            # limitar peticiones; los 5xx son fallos temporales del
+            # servidor. En ambos casos merece la pena esperar y reintentar
+            # en vez de dar el fallo por definitivo.
+            if resp.status_code in (403, 429) or resp.status_code >= 500:
+                wait_seconds = _ITUNES_RETRY_BASE_DELAY * (attempt + 1)
+
+                print(
+                    f"  iTunes devolvió {resp.status_code} "
+                    f"(probable límite de peticiones). "
+                    f"Reintentando en {wait_seconds:.1f}s "
+                    f"(intento {attempt + 1}/{_ITUNES_MAX_RETRIES})..."
+                )
+
+                last_error = RuntimeError(
+                    "La API de iTunes está limitando las peticiones "
+                    "(demasiadas búsquedas seguidas). Prueba a reintentar "
+                    "en un minuto o procesa menos canciones a la vez."
+                )
+
+                time.sleep(wait_seconds)
+                continue
+
+            resp.raise_for_status()
+
+            return resp.json().get("results", [])
+
+        except requests.exceptions.RequestException as exc:
+            last_error = exc
+
+            wait_seconds = _ITUNES_RETRY_BASE_DELAY * (attempt + 1)
+
+            print(
+                f"  Error consultando iTunes: {exc}. "
+                f"Reintentando en {wait_seconds:.1f}s "
+                f"(intento {attempt + 1}/{_ITUNES_MAX_RETRIES})..."
+            )
+
+            time.sleep(wait_seconds)
+
+    if last_error is not None:
+        raise last_error
+
+    raise RuntimeError(
+        "No se pudo consultar iTunes tras varios intentos."
+    )
 
 
 def search_itunes(
@@ -220,7 +282,7 @@ def search_itunes(
 
     candidates = {}
 
-    for q in unique_queries:
+    for index, q in enumerate(unique_queries):
         for item in _itunes_results(q):
             track_id = (
                 item.get("trackId")
@@ -232,6 +294,12 @@ def search_itunes(
             )
 
             candidates[track_id] = item
+
+        # Pequeña pausa entre búsquedas de la misma canción para no
+        # ráfaguear peticiones a iTunes (ayuda a evitar el límite de
+        # peticiones cuando se procesan varias canciones seguidas).
+        if index < len(unique_queries) - 1:
+            time.sleep(0.15)
 
     if not candidates:
         return None

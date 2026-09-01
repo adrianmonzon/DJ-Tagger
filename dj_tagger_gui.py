@@ -1597,6 +1597,11 @@ class DJTaggerApp:
                     ),
             )
 
+            # Pequeña pausa entre canciones para no ráfaguear peticiones
+            # a iTunes cuando se procesan varias de golpe.
+            if index < total:
+                time.sleep(0.2)
+
         # No mostrar botones de confirmación hasta
         # que TODAS las canciones hayan terminado.
         self.root.after(
@@ -1638,6 +1643,7 @@ class DJTaggerApp:
 
         self._processing_paths = {}
         self._processing_results = []
+        self._processing_errors = {}
         self._processing_total = len(files)
         self._processing_done = 0
 
@@ -1735,6 +1741,29 @@ class DJTaggerApp:
 
         row = self.processing_tree.identify_row(event.y)
         column = self.processing_tree.identify_column(event.x)
+
+        # Columna de estado (#4): si la fila está en error, mostrar el motivo.
+        if row and column == "#4":
+            values = self.processing_tree.item(row, "values")
+
+            if values and str(values[-1]).strip() == "ERROR":
+                error_text = self._processing_errors.get(
+                    row,
+                    "Error desconocido al procesar el archivo.",
+                )
+
+                filename = self._shorten_filename(
+                    os.path.basename(
+                        str(self._processing_paths.get(row, ""))
+                    )
+                )
+
+                messagebox.showerror(
+                    "Error al procesar la canción",
+                    f"{filename}\n\n{error_text}",
+                )
+
+            return
 
         # Solo Canción y Artista son editables.
         if not row or column not in ("#2", "#3"):
@@ -2133,6 +2162,8 @@ class DJTaggerApp:
             ).strip()
 
             status = "✓"
+
+            self._processing_errors.pop(item_id, None)
         else:
             title = ""
             artist = ""
@@ -2142,6 +2173,10 @@ class DJTaggerApp:
             ).strip()
 
             status = "ERROR"
+
+            self._processing_errors[item_id] = (
+                error or "Error desconocido al procesar el archivo."
+            )
 
         # Actualizar únicamente ESTA fila.
         self.processing_tree.item(
@@ -2172,6 +2207,7 @@ class DJTaggerApp:
                 except tk.TclError:
                     pass
 
+        result["_item_id"] = item_id
         self._processing_results.append(result)
 
         # Guardamos los valores que se mostrarán en los Entry.
@@ -2251,6 +2287,28 @@ class DJTaggerApp:
         buttons_inner = ttk.Frame(buttons)
         buttons_inner.pack(anchor="center")
 
+        has_failed = any(
+            not result.get("success")
+            for result in self._processing_results
+        )
+
+        # Reintentar solo las fallidas
+        if has_failed:
+            retry_button = ttk.Button(
+                buttons_inner,
+                text="Reintentar fallidas",
+                style="Primary.TButton",
+                command=self._retry_failed_processing,
+            )
+            retry_button.pack(
+                side="left",
+                padx=(0, 6),
+            )
+
+            self.processing_retry_button = retry_button
+        else:
+            self.processing_retry_button = None
+
         # Confirmar
         confirm_button = ttk.Button(
             buttons_inner,
@@ -2279,6 +2337,146 @@ class DJTaggerApp:
         self.processing_confirm_button = confirm_button
         self.processing_cancel_button = cancel_button
 
+    def _retry_failed_processing(self):
+        failed_items = [
+            (item_id, self._processing_paths[item_id])
+            for item_id, error in list(self._processing_errors.items())
+            if item_id in self._processing_paths
+        ]
+
+        if not failed_items:
+            return
+
+        # Deshabilitar botones mientras se reintenta.
+        for btn_attr in (
+            "processing_retry_button",
+            "processing_confirm_button",
+            "processing_cancel_button",
+        ):
+            btn = getattr(self, btn_attr, None)
+
+            if btn is not None:
+                try:
+                    btn.configure(state="disabled")
+                except Exception:
+                    pass
+
+        for item_id, _filepath in failed_items:
+            self.processing_tree.item(
+                item_id,
+                values=(
+                    self._shorten_filename(
+                        os.path.basename(
+                            str(self._processing_paths.get(item_id, ""))
+                        )
+                    ),
+                    "",
+                    "",
+                    "Procesando...",
+                ),
+            )
+
+        self._run_in_thread(
+            self._retry_failed_files_worker,
+            failed_items,
+        )
+
+    def _retry_failed_files_worker(self, items):
+        total = len(items)
+
+        for index, (item_id, filepath) in enumerate(items, start=1):
+            try:
+                result = core.process_file(
+                    filepath,
+                    preview_only=True,
+                )
+            except Exception as exc:
+                result = {
+                    "success": False,
+                    "filepath": filepath,
+                    "original_filename": os.path.basename(filepath),
+                    "error": str(exc),
+                }
+
+            self.root.after(
+                0,
+                lambda r=result, iid=item_id:
+                    self._apply_retry_result(iid, r),
+            )
+
+            if index < total:
+                time.sleep(0.2)
+
+        self.root.after(
+            100,
+            self._finish_processing_preview,
+        )
+
+    def _apply_retry_result(self, item_id, result):
+        if not self.processing_tree.exists(item_id):
+            return
+
+        filepath = str(result.get("filepath", ""))
+        self._processing_paths[item_id] = filepath
+
+        # Sustituir el resultado anterior de esta fila (localizado por
+        # item_id, no por índice, ya que solo se reintentan algunas filas).
+        for index, existing in enumerate(self._processing_results):
+            if existing.get("_item_id") == item_id:
+                result["_item_id"] = item_id
+                self._processing_results[index] = result
+                break
+        else:
+            result["_item_id"] = item_id
+            self._processing_results.append(result)
+
+        success = bool(result.get("success"))
+
+        if success:
+            title = str(result.get("title", "")).strip()
+            artist = str(result.get("artist", "")).strip()
+            status = "✓"
+
+            self._processing_errors.pop(item_id, None)
+        else:
+            title = ""
+            artist = ""
+            status = "ERROR"
+
+            self._processing_errors[item_id] = str(
+                result.get("error", "")
+            ).strip() or "Error desconocido al procesar el archivo."
+
+        self.processing_tree.item(
+            item_id,
+            values=(
+                self._shorten_filename(
+                    os.path.basename(filepath)
+                ),
+                "",
+                "",
+                status,
+            ),
+        )
+
+        for key in [(item_id, "cancion"), (item_id, "artista")]:
+            entry = self._processing_entries.pop(key, None)
+
+            if entry is not None:
+                try:
+                    entry.destroy()
+                except tk.TclError:
+                    pass
+
+        self._create_processing_editors(
+            item_id,
+            title,
+            artist,
+        )
+
+        self.processing_tree.see(item_id)
+        self.processing_tree.update_idletasks()
+
     def _process_confirmed_files_worker(
         self,
         results,
@@ -2294,6 +2492,7 @@ class DJTaggerApp:
         results = list(results or [])
         total = len(results)
         done = 0
+        skipped = []
 
         for result in results:
             if not isinstance(result, dict):
@@ -2315,6 +2514,19 @@ class DJTaggerApp:
             ).strip()
 
             if not title or not artist:
+                skipped.append(os.path.basename(filepath))
+                done += 1
+
+                self.root.after(
+                    0,
+                    lambda d=done, t=total:
+                        self.processing_title.configure(
+                            text=(
+                                f"Procesando {d} de {t} "
+                                f"canciones..."
+                            )
+                        ),
+                )
                 continue
 
             # Buscar la fila correspondiente.
@@ -2436,18 +2648,33 @@ class DJTaggerApp:
         # Terminado TODO el procesamiento.
         self.root.after(
             0,
-            self._finish_processing,
+            lambda s=skipped: self._finish_processing(s),
         )
 
 
 
-    def _finish_processing(self):
+    def _finish_processing(self, skipped=None):
         try:
             self.processing_title.configure(
                 text="Proceso terminado"
             )
         except Exception:
             pass
+
+        if skipped:
+            names = "\n".join(f"• {name}" for name in skipped[:15])
+
+            if len(skipped) > 15:
+                names += f"\n… y {len(skipped) - 15} más."
+
+            messagebox.showwarning(
+                "Algunas canciones no se añadieron",
+                f"{len(skipped)} canción(es) no se añadieron porque no "
+                f"tenían título/artista identificado (seguían en ERROR):\n\n"
+                f"{names}\n\n"
+                f"Usa \"Reintentar fallidas\" antes de confirmar la próxima "
+                f"vez, o rellénalas a mano en las columnas Canción/Artista.",
+            )
 
         # Quitar botones.
         buttons = getattr(
